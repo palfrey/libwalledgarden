@@ -79,7 +79,8 @@ void print_triple(void* user_data, const raptor_statement* triple)
 
 int main(int argc, char **argv)
 {
-	bs = blog_choose("okcupid");
+	//bs = blog_choose("okcupid");
+	bs = blog_choose("myspace");
 	if (argc!=3)
 	{
 		printf("Usage: %s <username> <password>\n",argv[0]);
@@ -118,7 +119,7 @@ int main(int argc, char **argv)
 	browser *b = browser_init("cookies");
 	CURL *c = browser_curl(b);
 	curl_easy_setopt(c,CURLOPT_URL,"http://palfrey.livejournal.com/data/rss");
-	char *tmpbuf = getfile(c,CACHE_DIR DIRSEP "rss",true, NULL);
+	char *tmpbuf = getfile(c,CACHE_DIR DIRSEP "rss",false, NULL);
 
 	raptor_parser* rdf_parser=NULL;
 	raptor_uri *base_uri;
@@ -129,12 +130,12 @@ int main(int argc, char **argv)
 
 	raptor_set_statement_handler(rdf_parser, NULL, print_triple);
 
-	char *ustring = raptor_uri_filename_to_uri_string(CACHE_DIR DIRSEP "rss");
+	unsigned char *ustring = raptor_uri_filename_to_uri_string(CACHE_DIR DIRSEP "rss");
 	base_uri=raptor_new_uri(ustring);
 	free(ustring);
 
 	raptor_start_parse(rdf_parser, base_uri);
-	raptor_parse_chunk(rdf_parser, tmpbuf, strlen(tmpbuf), 1);
+	raptor_parse_chunk(rdf_parser, (unsigned char*)tmpbuf, strlen(tmpbuf), 1);
 	raptor_free_parser(rdf_parser);
 
 	raptor_free_uri(base_uri);

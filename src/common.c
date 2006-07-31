@@ -32,6 +32,7 @@
 #include <curl/curl.h>
 #include <assert.h>
 #include "okcupid.h"
+#include "myspace.h"
 #include "blog.h"
 #include "common.h"
 #include <glib.h>
@@ -159,7 +160,12 @@ char *url_format(CURL *c,const char *input)
 
 const blog_system* blog_choose(const char*name)
 {
-	return &okcupid_blog_system;
+	if (strcmp(name,"okcupid")==0)
+		return &okcupid_blog_system;
+	else if (strcmp(name,"myspace")==0)
+		return &myspace_blog_system;
+	else
+		return NULL;
 }
 
 char *findandreplace(const char *inp, const replace *items, int count)
