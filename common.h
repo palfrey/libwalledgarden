@@ -20,4 +20,13 @@ char *getfile(CURL *c, const char *filename, bool ignorefile, long *retcode);
 
 char *url_format(CURL *c, const char *input);
 
+typedef struct _replace
+{
+	const char *from;
+	const char *to;
+} replace;
+
+char *findandreplace(const char *inp, const replace *using, const int count);
+
+
 #endif
