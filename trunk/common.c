@@ -33,6 +33,8 @@
 #include <assert.h>
 #include "okcupid.h"
 #include "blog.h"
+#include "common.h"
+#include <glib.h>
 
 /* safe_realloc is necessary for windows
  * Most Unixes do realloc() fine with a NULL pointer, but windows segfaults on one.
@@ -159,3 +161,18 @@ const blog_system* blog_choose(const char*name)
 {
 	return &okcupid_blog_system;
 }
+
+char *findandreplace(const char *inp, const replace *items, int count)
+{
+	int i;
+	gchar ** sp = NULL, *out = NULL;
+	for (i=0;i<count;i++)
+	{
+		sp = g_strsplit(out==NULL?inp:out,items[i].from, -1);
+		out = g_strjoinv(items[i].to, sp);
+		free(sp);
+	}
+	return out;
+}
+
+

@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <glib.h>
 
 blog_entry submit;
 blog_state blog;
@@ -15,6 +16,12 @@ const blog_system *bs;
 
 char **posts = NULL;
 int post_count =0;
+
+replace items[] = {
+				{"</li><br /><li>","</li><li>"},
+				{"<ul><br /><li>","<ul><li>"},
+				{"</li><br /></ul>","</li></ul>"}
+				};
 
 void print_triple(void* user_data, const raptor_statement* triple) 
 {
@@ -29,9 +36,10 @@ void print_triple(void* user_data, const raptor_statement* triple)
 			sprintf(url, "<i>Original post is <a href=\"%s\">here</a> on my Livejournal blog</i>\n\n",(char*)triple->object);
 		else if (strcmp(triple->predicate, "http://purl.org/rss/1.0/description")==0)
 		{
+			char *out = findandreplace((char*)triple->object,items,sizeof(items)/sizeof(replace));
 			free(submit.content);
-			submit.content = malloc(strlen(triple->object)+strlen(url)+1);
-			sprintf(submit.content,"%s%s",url,(char*)triple->object);
+			submit.content = g_strdup_printf("%s%s",url,out);
+			free(out);
 		}	
 		else if (strcmp(triple->predicate, "http://purl.org/dc/elements/1.1/date")==0)
 		{
