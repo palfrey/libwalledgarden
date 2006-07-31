@@ -1,3 +1,25 @@
+/*
+ * Copyright (C) Tom Parker
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation; either version 2 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
+ * 02111-1307, USA.
+
+ * Authors:
+ *      Tom Parker <palfrey@tevp.net>
+ */
+
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,32 +33,28 @@
 #include "browser.h"
 #include "cookies.h"
 #include "common.h"
+#include "blog.h"
+#include <glib.h>
 
-int main()
+typedef struct _myspace_priv
 {
-	browser *b = browser_init(COOKIE_FILE);
-	struct cookie_jar *jar = (struct cookie_jar*)calloc(1,sizeof(struct cookie_jar));
-	cookie_jar_load (jar, COOKIE_FILE);
-	if (!exists(CACHE_DIR))
-	{
-		#ifdef _WIN32
-		mkdir(CACHE_DIR);
-		#else
-		mkdir(CACHE_DIR, S_IRWXU);
-		#endif
-	}
-	
-	char * tmpbuf;
-	char token[255],url[255];
+	const char *username;
+	const char *password;
+	const char *token;
+} myspace_priv;
 
-	regex_t datareg,hrefreg,moodreg;
-	regmatch_t match[3];
+static bool login(blog_state *blog, bool ignorecache)
+{
+	CURL *c = browser_curl(blog->b);
+	myspace_priv *p = (myspace_priv*)blog->_priv;
+	char * tmpbuf, *url;
+	regex_t datareg;
 	int ret;
+	regmatch_t match[3];
 	char errbuf[255];
 
-	CURL *c = browser_curl(b);
 	curl_easy_setopt(c,CURLOPT_URL,"http://www.myspace.com");
-	tmpbuf = getfile(c,CACHE_DIR DIRSEP "login");
+	tmpbuf = getfile(c,CACHE_DIR DIRSEP "login", false, NULL);
 
 	if (regcomp(&datareg, "<form action=\"(http://login.myspace.com/index.cfm\\?fuseaction=login.process&MyToken=([^\\\"]*))\" method=\"post\" name=\"theForm\" id=\"theForm\">", 0) != 0) {
 		printf("Error while compiling pattern\n");
@@ -46,41 +64,74 @@ int main()
 	if (ret != 0) {
 		regerror(ret, &datareg, errbuf, 255);
 		printf("Error while matching pattern (login): %s\n", errbuf);
-		exit(EXIT_FAILURE);
+		return false;
 	}
 	tmpbuf[match[1].rm_eo] = '\0';
-	strcpy(token,&tmpbuf[match[2].rm_so]);
-	strcpy(url,&tmpbuf[match[1].rm_so]);
-	printf("token is %s\n",token);
+	p->token = strdup(&tmpbuf[match[2].rm_so]);
+	url = strdup(&tmpbuf[match[1].rm_so]);
+	printf("token is %s\n",p->token);
 	free(tmpbuf);
 
-	c = browser_curl(b);
+	c = browser_curl(blog->b);
 	curl_easy_setopt(c,CURLOPT_URL,url);
-	curl_easy_setopt(c,CURLOPT_POSTFIELDS,"email=myspace%40tevp.net&password=5epsilon&Remember=Remember&loginbutton.x=41&loginbutton.y=8");
-	tmpbuf = getfile(c,CACHE_DIR DIRSEP "logged");
+	char *outbuf = g_strdup_printf("email=%s&password=%s&Remember=Remember&ctl00%%24Main%%24SplashDisplay%%24login%%24loginbutton.x=19&ctl00%%24Main%%24SplashDisplay%%24login%%24loginbutton.y=11",url_format(c,p->username),url_format(c,p->password));
+	curl_easy_setopt(c,CURLOPT_POSTFIELDS,outbuf);
+	long retcode=0;
+	tmpbuf = getfile(c,CACHE_DIR DIRSEP "logged",false,&retcode);
 	free(tmpbuf);
+	if (retcode!=0 && retcode!=302)
+		return false;
+	else	
+		return true;
+}
 
-	c = browser_curl(b);
-	sprintf(url,"http://home.myspace.com/index.cfm?fuseaction=user&MyToken=%s",token);
+static bool blog_init(blog_state *blog, const char *username, const char *password)
+{
+	blog->b = browser_init(COOKIE_FILE);
+	blog->_priv = malloc(sizeof(myspace_priv));
+	myspace_priv *p = (myspace_priv*)blog->_priv;
+
+	p->username = strdup(username);
+	p->password = strdup(password);
+	return login(blog, false);
+}
+
+static blog_entry ** get_entries(blog_state *blog, bool ignorecache)
+{
+	browser *b = blog->b;
+	char * tmpbuf;
+	char *url;
+	myspace_priv *p = (myspace_priv*)blog->_priv;
+	blog_entry **entries = (blog_entry**)calloc(1,sizeof(blog_entry*));
+	int count = 0;
+
+	regex_t datareg,hrefreg,moodreg;
+	regmatch_t match[3];
+	int ret;
+	char errbuf[255];
+	CURL *c = browser_curl(blog->b);
+	url = g_strdup_printf("http://home.myspace.com/index.cfm?fuseaction=user&MyToken=%s",p->token);
 	curl_easy_setopt(c,CURLOPT_URL,url);
-	tmpbuf = getfile(c,CACHE_DIR DIRSEP "home");
-	if (regcomp(&datareg, "(http://blog.myspace.com/[^<]*)<br />", 0) != 0) {
+	tmpbuf = getfile(c,CACHE_DIR DIRSEP "home",false,NULL);
+	if (regcomp(&datareg, "(http://blog.myspace.com/index.cfm\\?fuseaction=blog.ListAll&amp;friendID=\\d+)", 0) != 0) {
 		printf("Error while compiling pattern\n");
 		exit(EXIT_FAILURE);
 	}
 	ret = regexec(&datareg, tmpbuf, 2, match, 0);
 	if (ret != 0) {
 		regerror(ret, &datareg, errbuf, 255);
-		printf("Error while matching pattern: %s\n", errbuf);
+		printf("Error while matching pattern (blog): %s\n", errbuf);
 		exit(EXIT_FAILURE);
 	}
 	tmpbuf[match[1].rm_eo] = '\0';
-	strcpy(url,&tmpbuf[match[1].rm_so]);
+	free(url);
+	url = strdup(&tmpbuf[match[1].rm_so]);
 	free(tmpbuf);
 	
 	c = browser_curl(b);
 	curl_easy_setopt(c,CURLOPT_URL,url);
-	tmpbuf = getfile(c,CACHE_DIR DIRSEP "blog");
+	tmpbuf = getfile(c,CACHE_DIR DIRSEP "blog", false, NULL);
+	free(url);
 	if (regcomp(&datareg, "<p class=\"blog([^\\\"]*)\">(.*?)</p>", REG_DOTALL|REG_NEWLINE) != 0) {
 		printf("Error while compiling pattern\n");
 		exit(EXIT_FAILURE);
@@ -94,11 +145,15 @@ int main()
 		exit(EXIT_FAILURE);
 	}
 	int index = 0;
-	struct tm out;
 	//printf("dist = %d (%9s)\n",match[0].rm_eo,&tmpbuf[index]);
 	ret = regexec(&datareg, &tmpbuf[index], 3, match, 0);
+	if (ret !=0)
+		printf("No entries!\n");
+	entries = (blog_entry**)realloc(entries,(count+2)*sizeof(blog_entry*));
+	entries[count] = (blog_entry*)malloc(sizeof(blog_entry));
 	while (ret==0)
 	{
+		struct tm out;
 		const char * cat = &tmpbuf[index+match[1].rm_so];
 		char * content = &tmpbuf[index+match[2].rm_so];
 		tmpbuf[index+match[1].rm_eo] = '\0';
@@ -113,13 +168,15 @@ int main()
 				exit(1);
 			}
 			strftime(outstr,sizeof(outstr),"%Y-%m-%d",&out);
-			printf("Time = %s (from %s)\n\n",outstr,content);
+			//printf("Time = %s (from %s)\n\n",outstr,content);
 		}
 		else if (strcmp(cat,"Subject")==0)
 		{
 			int end;
 			regmatch_t mood[4];
 			ret = regexec(&moodreg, content, 4, mood, 0);
+			entries = (blog_entry**)realloc(entries,(count+2)*sizeof(blog_entry*));
+			entries[count] = (blog_entry*)malloc(sizeof(blog_entry));
 			if (ret==0)
 			{
 				const char *url = &content[mood[2].rm_so];
@@ -138,7 +195,8 @@ int main()
 				end--;
 			//printf("c[e] = %d end=%d\n",content[end],end);	
 			content[end+1]='\0';
-			printf("Subject: %s\n",content);
+			entries[count]->title = strdup(content);
+			printf("Subject(%d): %s\n",count,content);
 		}
 		else if (strcmp(cat,"ContentInfo")==0)
 		{
@@ -157,7 +215,9 @@ int main()
 					char outstr[200];
 					out.tm_sec = 0;
 					strftime(outstr,sizeof(outstr),"%Y-%m-%d %I:%M:%S %p",&out);
-					printf("Time = %s (from %s)\n",outstr,name);
+					printf("Time(%d) = %s (from %s)\n",count,outstr,name);
+					memcpy(&(entries[count]->date),&out,sizeof(struct tm));
+					count++;
 				}
 				/*else
 					printf("url=%s, name=%s\n",url,name);*/
@@ -167,14 +227,22 @@ int main()
 			}
 			printf("\n");
 		}
+		else if (strcmp(cat,"Content")==0)
+			entries[count]->content = strdup(content);
 		else
 			printf("cat=%s, content = %s\n",cat, content);
 
 		index += match[0].rm_eo+1;
 		//printf("dist = %d (%9s)\n",match[0].rm_eo,&tmpbuf[index]);
 		ret = regexec(&datareg, &tmpbuf[index], 3, match, 0);
-	}	
-
-	browser_free(b);
-	return 0;
+	}
+	return entries;
 }
+
+static void cleanup(blog_state *blog)
+{
+	browser_free(blog->b);
+}
+
+const blog_system myspace_blog_system = {blog_init,get_entries,NULL, cleanup};
+

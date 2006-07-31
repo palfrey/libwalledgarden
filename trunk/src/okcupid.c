@@ -43,21 +43,18 @@ typedef struct _okcupid_priv
 	const char *password;
 } okcupid_priv;
 
-
 static void login(blog_state *blog, bool ignorecache)
 {
 	char * tmpbuf;
 	okcupid_priv *p = (okcupid_priv*)blog->_priv;
 	CURL *c = browser_curl(blog->b);
-	char outbuf[512];
 	long retcode;
 	curl_easy_setopt(c,CURLOPT_URL,"http://www.okcupid.com/login");
-	sprintf(outbuf,"username=%s&password=%s&p=%%2Fhome&submit=Login",p->username,p->password);
+	char *outbuf = g_strdup_printf("username=%s&password=%s&p=%%2Fhome&submit=Login",p->username,p->password);
 	curl_easy_setopt(c,CURLOPT_POSTFIELDS,outbuf);
 	tmpbuf = getfile(c,CACHE_DIR DIRSEP "login", ignorecache, &retcode);
 	free(tmpbuf);
 }
-
 
 static bool blog_init(blog_state *blog, const char *username, const char *password)
 {
