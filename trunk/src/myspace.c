@@ -45,7 +45,6 @@ typedef struct _myspace_priv
 
 static bool login(blog_state *blog, bool ignorecache)
 {
-	CURL *c = browser_curl(blog->b);
 	myspace_priv *p = (myspace_priv*)blog->_priv;
 	char * tmpbuf, *url;
 	regex_t datareg;
@@ -53,31 +52,40 @@ static bool login(blog_state *blog, bool ignorecache)
 	regmatch_t match[3];
 	char errbuf[255];
 
-	curl_easy_setopt(c,CURLOPT_URL,"http://www.myspace.com");
-	tmpbuf = getfile(c,CACHE_DIR DIRSEP "login", false, NULL);
-
 	if (regcomp(&datareg, "<form action=\"(http://login.myspace.com/index.cfm\\?fuseaction=login.process&MyToken=([^\\\"]*))\" method=\"post\" name=\"theForm\" id=\"theForm\">", 0) != 0) {
 		printf("Error while compiling pattern\n");
 		exit(EXIT_FAILURE);
 	}
-	ret = regexec(&datareg, tmpbuf, 3, match, 0);
-	if (ret != 0) {
-		regerror(ret, &datareg, errbuf, 255);
-		printf("Error while matching pattern (login): %s\n", errbuf);
-		return false;
-	}
+	while(1)
+	{
+		CURL *c = browser_curl(blog->b);
+		curl_easy_setopt(c,CURLOPT_URL,"http://www.myspace.com");
+		tmpbuf = getfile(c,CACHE_DIR DIRSEP "login", ignorecache, NULL);
+
+		ret = regexec(&datareg, tmpbuf, 3, match, 0);
+		if (ret != 0) {
+			regerror(ret, &datareg, errbuf, 255);
+			printf("Error while matching pattern (login): %s\n", errbuf);
+			if (ignorecache)
+				return false;
+			ignorecache = true;	
+			free(tmpbuf);
+		}
+		else
+			break;
+	}		
 	tmpbuf[match[1].rm_eo] = '\0';
 	p->token = strdup(&tmpbuf[match[2].rm_so]);
 	url = strdup(&tmpbuf[match[1].rm_so]);
 	printf("token is %s\n",p->token);
 	free(tmpbuf);
 
-	c = browser_curl(blog->b);
+	CURL *c = browser_curl(blog->b);
 	curl_easy_setopt(c,CURLOPT_URL,url);
 	char *outbuf = g_strdup_printf("email=%s&password=%s&Remember=Remember&ctl00%%24Main%%24SplashDisplay%%24login%%24loginbutton.x=19&ctl00%%24Main%%24SplashDisplay%%24login%%24loginbutton.y=11",url_format(c,p->username),url_format(c,p->password));
 	curl_easy_setopt(c,CURLOPT_POSTFIELDS,outbuf);
 	long retcode=0;
-	tmpbuf = getfile(c,CACHE_DIR DIRSEP "logged",false,&retcode);
+	tmpbuf = getfile(c,CACHE_DIR DIRSEP "logged",ignorecache,&retcode);
 	free(tmpbuf);
 	if (retcode!=0 && retcode!=302)
 		return false;
@@ -109,28 +117,36 @@ static blog_entry ** get_entries(blog_state *blog, bool ignorecache)
 	regmatch_t match[3];
 	int ret;
 	char errbuf[255];
-	CURL *c = browser_curl(blog->b);
-	url = g_strdup_printf("http://home.myspace.com/index.cfm?fuseaction=user&MyToken=%s",p->token);
-	curl_easy_setopt(c,CURLOPT_URL,url);
-	tmpbuf = getfile(c,CACHE_DIR DIRSEP "home",false,NULL);
 	if (regcomp(&datareg, "(http://blog.myspace.com/index.cfm\\?fuseaction=blog.ListAll&amp;friendID=\\d+)", 0) != 0) {
 		printf("Error while compiling pattern\n");
 		exit(EXIT_FAILURE);
 	}
-	ret = regexec(&datareg, tmpbuf, 2, match, 0);
-	if (ret != 0) {
-		regerror(ret, &datareg, errbuf, 255);
-		printf("Error while matching pattern (blog): %s\n", errbuf);
-		exit(EXIT_FAILURE);
+	url = g_strdup_printf("http://home.myspace.com/index.cfm?fuseaction=user&MyToken=%s",p->token);
+	while(1)
+	{
+		CURL *c = browser_curl(blog->b);
+		curl_easy_setopt(c,CURLOPT_URL,url);
+		tmpbuf = getfile(c,CACHE_DIR DIRSEP "home",ignorecache,NULL);
+		ret = regexec(&datareg, tmpbuf, 2, match, 0);
+		if (ret != 0) {
+			regerror(ret, &datareg, errbuf, 255);
+			printf("Error while matching pattern (blog): %s\n", errbuf);
+			if (ignorecache)
+				exit(EXIT_FAILURE);
+			ignorecache = true;
+			free(tmpbuf);
+		}
+		else
+			break;
 	}
 	tmpbuf[match[1].rm_eo] = '\0';
 	free(url);
 	url = strdup(&tmpbuf[match[1].rm_so]);
 	free(tmpbuf);
 	
-	c = browser_curl(b);
+	CURL *c = browser_curl(b);
 	curl_easy_setopt(c,CURLOPT_URL,url);
-	tmpbuf = getfile(c,CACHE_DIR DIRSEP "blog", false, NULL);
+	tmpbuf = getfile(c,CACHE_DIR DIRSEP "blog", ignorecache, NULL);
 	free(url);
 	if (regcomp(&datareg, "<p class=\"blog([^\\\"]*)\">(.*?)</p>", REG_DOTALL|REG_NEWLINE) != 0) {
 		printf("Error while compiling pattern\n");
