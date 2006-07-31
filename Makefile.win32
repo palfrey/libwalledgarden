@@ -1,0 +1,9 @@
+CC=gcc
+CFLAGS=-Wall -Werror -g
+COMMON_OBJ=$(patsubst %.c,%.o,$(wildcard *.c))
+
+export COMMON_OBJ
+
+all: $(COMMON_OBJ)
+	$(MAKE) -C okcupid -f Makefile.win32
+	$(MAKE) -C myspace -f Makefile.win32
