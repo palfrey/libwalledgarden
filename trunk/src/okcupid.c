@@ -43,7 +43,7 @@ typedef struct _okcupid_priv
 	const char *password;
 } okcupid_priv;
 
-static void login(blog_state *blog, bool ignorecache)
+static bool login(blog_state *blog, bool ignorecache)
 {
 	char * tmpbuf;
 	okcupid_priv *p = (okcupid_priv*)blog->_priv;
@@ -53,7 +53,13 @@ static void login(blog_state *blog, bool ignorecache)
 	char *outbuf = g_strdup_printf("username=%s&password=%s&p=%%2Fhome&submit=Login",p->username,p->password);
 	curl_easy_setopt(c,CURLOPT_POSTFIELDS,outbuf);
 	tmpbuf = getfile(c,CACHE_DIR DIRSEP "login", ignorecache, &retcode);
+	if (strstr(tmpbuf,"Sorry, your password didn't match")!=NULL)
+	{
+		printf("Password failure!\n");
+		return false;
+	}	
 	free(tmpbuf);
+	return true;
 }
 
 static bool blog_init(blog_state *blog, const char *username, const char *password)
@@ -63,11 +69,10 @@ static bool blog_init(blog_state *blog, const char *username, const char *passwo
 	okcupid_priv *p = (okcupid_priv*)blog->_priv;
 	p->username = strdup(username);
 	p->password = strdup(password);
-	login(blog, false);
-	return true;
+	return login(blog, false);
 }
 
-blog_entry ** get_entries(blog_state *blog, bool ignorecache)
+static blog_entry ** get_entries(blog_state *blog, bool ignorecache)
 {
 	regex_t datareg; //,hrefreg,moodreg;
 	regmatch_t match[4];
@@ -79,15 +84,24 @@ blog_entry ** get_entries(blog_state *blog, bool ignorecache)
 	okcupid_priv *p = (okcupid_priv*)blog->_priv;
 	char *tmpbuf;
 	long retcode;
+	int limit=0;
 	CURL *c = browser_curl(b);
-	while(1)
+	while(limit<2)
 	{
 		c = browser_curl(b);
 		curl_easy_setopt(c,CURLOPT_URL,"http://www.okcupid.com/journal");
 		tmpbuf = getfile(c,CACHE_DIR DIRSEP "journal", ignorecache, &retcode);
 		if (retcode == 200)
 			break;
-		login(blog, true);
+		ignorecache = true;	
+		if (!login(blog, ignorecache))
+			exit(EXIT_FAILURE);
+		limit++;
+	}
+	if (limit == 2)
+	{
+		printf("Much failing\n");
+		exit(EXIT_FAILURE);
 	}	
 	
 	if (regcomp(&datareg, "<div class=\"journal_head\"><span class=\"journal_title\">(.+?)\n</span>.*?<script language=\"javascript\">ezdate\\((\\d+), \\d+\\);</script></div>[ \n\t]*<div class=\"journal_content\">[\n \t]*(.*?)[\n \t]*</div>", REG_DOTALL|REG_NEWLINE) != 0) {
@@ -145,7 +159,7 @@ blog_entry ** get_entries(blog_state *blog, bool ignorecache)
 	return entries;
 }
 
-bool blog_post(blog_state *blog, const blog_entry* entry)
+static bool blog_post(blog_state *blog, const blog_entry* entry)
 {
 	char *outbuf = NULL;
 	long retcode;
@@ -201,7 +215,7 @@ bool blog_post(blog_state *blog, const blog_entry* entry)
 	return true;
 }
 
-void cleanup(blog_state *blog)
+static void cleanup(blog_state *blog)
 {
 	browser_free(blog->b);
 }
