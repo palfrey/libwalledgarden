@@ -79,16 +79,15 @@ void print_triple(void* user_data, const raptor_statement* triple)
 
 int main(int argc, char **argv)
 {
-	//bs = blog_choose("okcupid");
-	bs = blog_choose("myspace");
-	if (argc!=3)
+	if (argc!=4)
 	{
-		printf("Usage: %s <username> <password>\n",argv[0]);
+		printf("Usage: %s <blog system> <username> <password>\n",argv[0]);
 		exit(EXIT_FAILURE);
 	}
+	bs = blog_choose(argv[1]);
 
-	char *username = argv[1];
-	char *password = argv[2];
+	char *username = argv[2];
+	char *password = argv[3];
 	
 	if (!exists(CACHE_DIR))
 	{

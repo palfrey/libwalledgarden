@@ -260,5 +260,10 @@ static void cleanup(blog_state *blog)
 	browser_free(blog->b);
 }
 
-const blog_system myspace_blog_system = {blog_init,get_entries,NULL, cleanup};
+static bool blog_post(blog_state *blog, const blog_entry* entry)
+{
+	return true;
+}
+
+const blog_system myspace_blog_system = {blog_init,get_entries,blog_post, cleanup};
 
