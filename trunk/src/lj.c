@@ -33,7 +33,7 @@ void print_triple(void* user_data, const raptor_statement* triple)
 			submit.title = strdup(triple->object);
 		}	
 		else if (strcmp(triple->predicate, "http://purl.org/rss/1.0/link")==0)
-			sprintf(url, "<i>Original post is <a href=\"%s\">here</a> on my Livejournal blog</i>\n\n",(char*)triple->object);
+			sprintf(url, "<i>Original post is <a href=\"%s\">here</a> on my Livejournal blog</i><br/><br/>",(char*)triple->object);
 		else if (strcmp(triple->predicate, "http://purl.org/rss/1.0/description")==0)
 		{
 			char *out = findandreplace((char*)triple->object,items,sizeof(items)/sizeof(replace));
