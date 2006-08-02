@@ -11,9 +11,9 @@ AM_INIT_AUTOMAKE
 AC_PROG_CC
 
 # Checks for libraries.
-AC_CHECK_LIB([curl], [curl_easy_setopt],,AC_MSG_ERROR(Need libcurl))
-AC_CHECK_LIB([pcreposix], [regcomp],,AC_MSG_ERROR(Need libpcreposix))
-AC_CHECK_LIB([raptor], [raptor_new_parser],,AC_MSG_ERROR(Need libraptor))
+PKG_CHECK_MODULES(PCRE,libpcre)
+PKG_CHECK_MODULES(CURL,libcurl)
+PKG_CHECK_MODULES(RAPTOR,raptor)
 PKG_CHECK_MODULES(GLIB,glib-2.0)
 # Checks for header files.
 AC_HEADER_STDC
