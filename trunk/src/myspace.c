@@ -133,6 +133,8 @@ static blog_entry ** get_entries(blog_state *blog, bool ignorecache)
 			printf("Error while matching pattern (blog): %s\n", errbuf);
 			if (ignorecache)
 				exit(EXIT_FAILURE);
+			if (strstr(tmpbuf,"Object moved to <a href=\"http://login.myspace.com/")!=NULL)
+				login(blog,true);
 			ignorecache = true;
 			free(tmpbuf);
 		}
@@ -252,6 +254,7 @@ static blog_entry ** get_entries(blog_state *blog, bool ignorecache)
 		//printf("dist = %d (%9s)\n",match[0].rm_eo,&tmpbuf[index]);
 		ret = regexec(&datareg, &tmpbuf[index], 3, match, 0);
 	}
+	entries[count] = NULL;
 	return entries;
 }
 
@@ -262,6 +265,46 @@ static void cleanup(blog_state *blog)
 
 static bool blog_post(blog_state *blog, const blog_entry* entry)
 {
+	myspace_priv *p = (myspace_priv*)blog->_priv;
+	char * url;
+	CURL *c;
+	char * tmpbuf;
+	regex_t datareg;
+	regmatch_t match[2];
+	int ret;
+	
+	c = browser_curl(blog->b);
+
+	char *title = url_format(c,entry->title);
+	char *content = url_format(c,entry->content);
+	char *outbuf = g_strdup_printf("blogID=-1&postMonth=%d&postDay=%d&postYear=%d&postHour=%d&postMinute=%d&postTimeMarker=%s&subject=%s&BlogCategoryID=0&editor=false&body=%s&CurrentlyASIN=&CurrentlyProductName=&CurrentlyProductBy=&CurrentlyImageURL=&CurrentlyProductURL=&CurrentlyProductReleaseDate=&CurrentlyProductType=&Mode=music&MoodSetID=7&MoodID=0&MoodOther=&BlogViewingPrivacyID=0&Enclosure=",entry->date.tm_mon,entry->date.tm_mday,entry->date.tm_year+1900,entry->date.tm_hour%12,entry->date.tm_min,entry->date.tm_hour>=12?"PM":"AM",title,content);
+	url = g_strdup_printf("http://blog.myspace.com/index.cfm?fuseaction=blog.previewBlog&Mytoken=%s",p->token);
+	curl_easy_setopt(c,CURLOPT_POSTFIELDS,outbuf);
+	curl_easy_setopt(c,CURLOPT_URL,url);
+	tmpbuf = getfile(c,CACHE_DIR DIRSEP "post", true, NULL);
+	free(outbuf);
+	free(url);
+
+	if (regcomp(&datareg, "<input type=\"hidden\" name=\"hash\" value=\"([^\"]*)", 0) != 0) {
+		printf("Error while compiling pattern\n");
+		exit(EXIT_FAILURE);
+	}
+	ret = regexec(&datareg, tmpbuf, 2, match, 0);
+	if (ret != 0)
+	{
+		printf("Panic! No hash!\n");
+		return false;
+	}
+	tmpbuf[match[1].rm_eo] = '\0';
+	c = browser_curl(blog->b);
+	
+	outbuf = g_strdup_printf("blogID=-1&postMonth=%d&postDay=%d&postYear=%d&postHour=%d&postMinute=%d&postTimeMarker=%s&subject=%s&BlogCategoryID=0&editor=false&body=%s&CurrentlyASIN=&CurrentlyProductName=&CurrentlyProductBy=&CurrentlyImageURL=&CurrentlyProductURL=&CurrentlyProductReleaseDate=&CurrentlyProductType=&Mode=music&MoodSetID=7&MoodID=0&MoodOther=&BlogViewingPrivacyID=0&&hash=%s&Enclosure=",entry->date.tm_mon,entry->date.tm_mday,entry->date.tm_year+1900,entry->date.tm_hour%12,entry->date.tm_min,entry->date.tm_hour>=12?"PM":"AM",title,content, &tmpbuf[match[1].rm_so]);
+	curl_easy_setopt(c,CURLOPT_POSTFIELDS,outbuf);
+	curl_easy_setopt(c,CURLOPT_URL,"http://blog.myspace.com/index.cfm?fuseaction=blog.processCreate");
+	free(tmpbuf);
+	tmpbuf = getfile(c,CACHE_DIR DIRSEP "posted", true, NULL);
+	free(outbuf);
+
 	return true;
 }
 
