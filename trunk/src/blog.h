@@ -20,9 +20,9 @@ typedef struct _blog_entry
 
 typedef struct _blog_system
 {
-	bool (*init)(blog_state *blog, const char *username, const char *password);
-	blog_entry ** (*entries)(blog_state *blog, bool ignorecache);
-	bool (*post)(blog_state *,const blog_entry*);
+	void (*init)(blog_state *blog, const char *username, const char *password, void(*callback)(bool,void*));
+	void (*entries)(blog_state *blog, bool ignorecache, void (*callback)(blog_entry **));
+	void (*post)(blog_state *,const blog_entry*, void (*callback)(bool));
 	void (*cleanup)(blog_state *blog);
 } blog_system;
 

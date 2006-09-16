@@ -24,6 +24,13 @@
 #include <string.h>
 #include "browser.h"
 #include <stdlib.h>
+#include <stdarg.h>
+#include <glib.h>
+
+char *url_format(const char *input)
+{
+	return curl_escape(input,strlen(input));
+}
 
 browser * browser_init(const char *jar)
 {
@@ -39,7 +46,7 @@ void browser_free(browser* b)
 	free(b);
 }
 
-CURL * browser_curl(browser *b)
+CURL * browser_curl(browser *b, const char *url)
 {
 	CURL *curl;
 	struct curl_slist *hdrs = NULL;
@@ -55,6 +62,38 @@ CURL * browser_curl(browser *b)
 	hdrs = curl_slist_append(hdrs,"Accept-Language: en-gb,en-us;q=0.7,en;q=0.3");
 	hdrs = curl_slist_append(hdrs,"Accept-Charset: ISO-8859-1,utf-8;q=0.7,*;q=0.7");
 	curl_easy_setopt(curl,CURLOPT_HTTPHEADER,hdrs);
+	curl_easy_setopt(curl,CURLOPT_URL,url);
 	//curl_slist_free_all(hdrs);
 	return curl;
+}
+
+void browser_set_post(CURL *c, ...)
+{
+	va_list ap;
+	const gchar *key, *value;
+	char *buf = NULL;
+	va_start (ap, c);
+	
+	do
+	{
+		key = va_arg (ap, char*);
+		if (key)
+		{
+			char *temp;
+			key = url_format(key);
+			value = url_format(va_arg (ap, char*));
+			temp = g_strdup_printf("%s=%s",key,value);
+			if (buf == NULL)
+				buf =  temp;
+			else
+			{
+				char *oldbuf = buf;
+				buf = g_strjoin("&",oldbuf,temp, NULL);
+				free(oldbuf);
+				free(temp);
+			}
+		}
+	} while (key);
+	va_end (ap);
+	curl_easy_setopt(c,CURLOPT_POSTFIELDS,buf);
 }

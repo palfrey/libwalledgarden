@@ -14,11 +14,11 @@ char * strptime (const char *buf, const char *format, struct tm *timeptr);
 #endif
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <curl/curl.h>
-bool exists(const char *filename);
-char *getfile(CURL *c, const char *filename, bool ignorefile, long *retcode);
 
-char *url_format(CURL *c, const char *input);
+bool exists(const char *filename);
+void getfile(CURL *c, const char *filename, bool ignorefile, long *retcode, void (*callback)(char *, void *data), void *data);
 
 typedef struct _replace
 {
@@ -28,5 +28,15 @@ typedef struct _replace
 
 char *findandreplace(const char *inp, const replace *using, const int count);
 
+typedef struct {
+	bool ready;
+	pthread_cond_t cond;
+	pthread_mutex_t mutex;
+} ThreadReady;
 
+void ready_init(ThreadReady *th);
+void ready_wait(ThreadReady *th);
+void ready_wait_time(ThreadReady *th, uint16_t seconds);
+void ready_done(ThreadReady *th);
+bool ready_test(ThreadReady *th);
 #endif
