@@ -43,67 +43,117 @@ typedef struct _okcupid_priv
 	const char *password;
 } okcupid_priv;
 
-static bool login(blog_state *blog, bool ignorecache)
+typedef struct
 {
-	char * tmpbuf;
-	okcupid_priv *p = (okcupid_priv*)blog->_priv;
-	CURL *c = browser_curl(blog->b);
-	long retcode;
-	curl_easy_setopt(c,CURLOPT_URL,"http://www.okcupid.com/login");
-	char *outbuf = g_strdup_printf("username=%s&password=%s&p=%%2Fhome&submit=Login",p->username,p->password);
-	curl_easy_setopt(c,CURLOPT_POSTFIELDS,outbuf);
-	tmpbuf = getfile(c,CACHE_DIR DIRSEP "login", ignorecache, &retcode);
+	void(*callback)(bool, void *);
+	void *user_data;
+} login_struct;
+
+void parse_login(char *tmpbuf, void *data)
+{
+	login_struct *ls = data;
 	if (strstr(tmpbuf,"Sorry, your password didn't match")!=NULL)
 	{
 		printf("Password failure!\n");
-		return false;
+		ls->callback(false, ls->user_data);
 	}	
 	free(tmpbuf);
-	return true;
+	ls->callback(true, ls->user_data);
 }
 
-static bool blog_init(blog_state *blog, const char *username, const char *password)
+static void login(blog_state *blog, bool ignorecache, void(*callback)(bool, void *), void* data)
+{
+	okcupid_priv *p = (okcupid_priv*)blog->_priv;
+	CURL *c = browser_curl(blog->b,"http://www.okcupid.com/login");
+	long retcode;
+	login_struct *ls = (login_struct*)malloc(sizeof(login_struct));
+	ls->callback = callback;
+	ls->user_data = data;
+	char *outbuf = g_strdup_printf("username=%s&password=%s&p=%%2Fhome&submit=Login",p->username,p->password);
+	curl_easy_setopt(c,CURLOPT_POSTFIELDS,outbuf);
+	getfile(c,CACHE_DIR DIRSEP "login", ignorecache, &retcode, parse_login, ls);
+}
+
+static void blog_init(blog_state *blog, const char *username, const char *password, void(*callback)(bool,void*))
 {
 	blog->b = browser_init(COOKIE_FILE);
 	blog->_priv = malloc(sizeof(okcupid_priv));
 	okcupid_priv *p = (okcupid_priv*)blog->_priv;
 	p->username = strdup(username);
 	p->password = strdup(password);
-	return login(blog, false);
+	login(blog, false, callback,NULL);
 }
 
-static blog_entry ** get_entries(blog_state *blog, bool ignorecache)
+typedef struct
 {
-	regex_t datareg; //,hrefreg,moodreg;
-	regmatch_t match[4];
-	int ret, index;
-	blog_entry **entries = (blog_entry**)calloc(1,sizeof(blog_entry*));
-	int count = 0;
-
-	browser *b = blog->b;
-	okcupid_priv *p = (okcupid_priv*)blog->_priv;
-	char *tmpbuf;
+	int limit;
 	long retcode;
-	int limit=0;
-	CURL *c = browser_curl(b);
-	while(limit<2)
+	blog_state *blog;
+	bool ignorecache;
+	void (*callback)(blog_entry **);
+	bool handle_data;
+} journal_storage;
+
+static void do_entry(char *tmpbuf, void *data);
+
+static void get_entries(blog_state *blog, bool ignorecache, void (*callback)(blog_entry **))
+{
+	journal_storage *js = (journal_storage*)calloc(1,sizeof(journal_storage));
+	js->blog = blog;
+	js->ignorecache = ignorecache;
+	js->callback = callback;
+	js->handle_data = false;
+	js->limit = 0;
+	do_entry(NULL, js);
+}
+
+static void entry_login(bool ok, void *data)
+{
+	journal_storage *js = data;
+	if (!ok)
 	{
-		c = browser_curl(b);
-		curl_easy_setopt(c,CURLOPT_URL,"http://www.okcupid.com/journal");
-		tmpbuf = getfile(c,CACHE_DIR DIRSEP "journal", ignorecache, &retcode);
-		if (retcode == 200)
-			break;
-		ignorecache = true;	
-		if (!login(blog, ignorecache))
-			exit(EXIT_FAILURE);
-		limit++;
+		printf("Much failing\n");
+		exit(EXIT_FAILURE);
 	}
-	if (limit == 2)
+	do_entry(NULL,js);
+}
+
+static void do_entry(char *tmpbuf, void *data)
+{
+	journal_storage *js = data;
+	while(1)
+	{
+		if (js->handle_data)
+		{
+			if (js->retcode == 200)
+				break;
+			js->ignorecache = true;	
+			js->handle_data = false;
+			login(js->blog, js->ignorecache, entry_login, js);
+			return;
+		}
+		if(js->limit==2)
+			break;
+		
+		CURL *c  = browser_curl(js->blog->b,"http://www.okcupid.com/journal");
+		js->limit++;
+		js->handle_data = true;
+		getfile(c,CACHE_DIR DIRSEP "journal", js->ignorecache, &js->retcode,do_entry,js);
+		return;
+	}
+	if (js->limit == 2)
 	{
 		printf("Much failing\n");
 		exit(EXIT_FAILURE);
 	}	
 	
+	regex_t datareg;
+	okcupid_priv *p = (okcupid_priv*)js->blog->_priv;
+	regmatch_t match[4];
+	int ret, index;
+	blog_entry **entries = (blog_entry**)calloc(1,sizeof(blog_entry*));
+	int count = 0;
+
 	if (regcomp(&datareg, "<div class=\"journal_head\"><span class=\"journal_title\">(.+?)\n</span>.*?<script language=\"javascript\">ezdate\\((\\d+), \\d+\\);</script></div>[ \n\t]*<div class=\"journal_content\">[\n \t]*(.*?)[\n \t]*</div>", REG_DOTALL|REG_NEWLINE) != 0) {
 		printf("Error while compiling pattern\n");
 		exit(EXIT_FAILURE);
@@ -156,63 +206,133 @@ static blog_entry ** get_entries(blog_state *blog, bool ignorecache)
 	printf("tuid = '%s'\n",tuid);
 	free(tmpbuf);
 
-	return entries;
+	js->callback(entries);
 }
 
-static bool blog_post(blog_state *blog, const blog_entry* entry)
+typedef struct
 {
-	char *outbuf = NULL;
+	blog_state *blog;
+	const blog_entry* entry;
+	void (*callback)(bool);
+	char *title;
+	char *content;
+} post_data;
+
+static void date_set(char *tmpbuf, void *data);
+
+static void blog_post(blog_state *blog, const blog_entry* entry, void (*callback)(bool))
+{
+	//char *outbuf = NULL;
 	long retcode;
-	CURL *c = browser_curl(blog->b);
-	char *title = url_format(c,entry->title);
-	char *content = url_format(c,entry->content);
-	outbuf = g_strdup_printf("tuid=%s&title=%s&content=%s&commentsecurity=0&commentapproval=0&postsecurity=0&formatting=0&add=Publish&trackback_username=&trackback_boardid=&trackback_url=&trackback_title=&trackback_uservar=&trackback_hideresponseline=",((okcupid_priv*)blog->_priv)->tuid,title,content);
-	printf("outbuf = '%s'\n",outbuf);
-	curl_easy_setopt(c,CURLOPT_URL,"http://www.okcupid.com/journal");
+	CURL *c = browser_curl(blog->b,"http://www.okcupid.com/journal");
+	post_data * pd = (post_data*)malloc(sizeof(post_data));
+	pd->blog = blog;
+	pd->entry = entry;
+	pd->callback = callback;
+	pd->title = url_format(entry->title);
+	pd->content = url_format(entry->content);
+	browser_set_post(c,
+		"tuid",((okcupid_priv*)blog->_priv)->tuid,
+		"title", pd->title,
+		"content",pd->content,
+		"commentsecurity","0",
+		"commentapproval","0",
+		"postsecurity","0",
+		"formatting","0",
+		"add","Publish",
+		"trackback_username","",
+		"trackback_boardid","",
+		"trackback_url","",
+		"trackback_title","",
+		"trackback_uservar","",
+		"trackback_hideresponseline","",
+		NULL);
+	//printf("outbuf = '%s'\n",outbuf);
 	curl_easy_setopt(c,CURLOPT_REFERER,"http://www.okcupid.com/jpost");
-	curl_easy_setopt(c,CURLOPT_POSTFIELDS,outbuf);
-	getfile(c,CACHE_DIR DIRSEP "journal", true, &retcode);
-	if (entry->date.tm_year!=0)
+	//curl_easy_setopt(c,CURLOPT_POSTFIELDS,outbuf);
+	getfile(c,CACHE_DIR DIRSEP "journal", true, &retcode, date_set, pd);
+}
+
+static void more_date_set(char *tmpbuf, void *data);
+static void end_post(char *tmpbuf, void *data);
+
+static void date_set(char *tmpbuf, void *data)
+{
+	post_data *pd = data;
+	free(tmpbuf);
+
+	if (pd->entry->date.tm_year!=0)
 	{
-		browser *b = blog->b;
-		CURL *c = browser_curl(b);
-		char *tmpbuf;
-		regex_t datareg;
-		curl_easy_setopt(c,CURLOPT_URL,"http://www.okcupid.com/journal");
-		tmpbuf = getfile(c,CACHE_DIR DIRSEP "journal", true, &retcode);
-		//curl_easy_cleanup(c);
-		if (regcomp(&datareg, "\\/jpost\\?edit=(\\d+)", 0) != 0) {
-			printf("Error while compiling pattern\n");
-			exit(EXIT_FAILURE);
-		}
-		regmatch_t match[2];
-		int ret = regexec(&datareg, tmpbuf, 2, match, 0);
-		regfree(&datareg);
-		if (ret!=0)
-		{
-			printf("no puid!\n");
-			exit(EXIT_FAILURE);
-		}
-		char uid[200];
-		tmpbuf[match[1].rm_eo] = '\0';
-		strcpy(uid,&tmpbuf[match[1].rm_so]);
-		printf("uid = '%s'\n",uid);
-		free(tmpbuf);
-		int gmt=mktime((struct tm*)&(entry->date));
-		printf("gmt=%d\n",gmt);
-		free(outbuf);
-		outbuf = g_strdup_printf("tuid=%s&update=1&postid=%s&postgmt=%d&title=%s&content=%s&commentsecurity=0&commentapproval=0&postsecurity=0&formatting=0&month=%d&date=%d&year=%d&hour=%d&minute=%d&ampm=%s&add=Publish",((okcupid_priv*)blog->_priv)->tuid,uid,gmt,title,content,entry->date.tm_mon,entry->date.tm_mday,entry->date.tm_year+1900,entry->date.tm_hour%12,entry->date.tm_min,entry->date.tm_hour>=12?"pm":"am");
-		printf("outbuf = '%s'\n",outbuf);
-		c = browser_curl(blog->b);
-		curl_easy_setopt(c,CURLOPT_URL,"http://www.okcupid.com/journal");
-		curl_easy_setopt(c,CURLOPT_POSTFIELDS,outbuf);
-		getfile(c,NULL, false, &retcode);
+		browser *b = pd->blog->b;
+		CURL *c = browser_curl(b,"http://www.okcupid.com/journal");
+		long retcode;
+		getfile(c,CACHE_DIR DIRSEP "journal", true, &retcode, more_date_set, pd);
 	}
+	else	
+		end_post(NULL,pd);
+}
+
+static void more_date_set(char *tmpbuf, void *data)
+{
+	post_data *pd = data;
+	regex_t datareg;
+	//curl_easy_cleanup(c);
+	if (regcomp(&datareg, "\\/jpost\\?edit=(\\d+)", 0) != 0) {
+		printf("Error while compiling pattern\n");
+		exit(EXIT_FAILURE);
+	}
+	regmatch_t match[2];
+	int ret = regexec(&datareg, tmpbuf, 2, match, 0);
+	regfree(&datareg);
+	if (ret!=0)
+	{
+		printf("no puid!\n");
+		exit(EXIT_FAILURE);
+	}
+	char uid[200];
+	long retcode;
+	tmpbuf[match[1].rm_eo] = '\0';
+	strcpy(uid,&tmpbuf[match[1].rm_so]);
+	printf("uid = '%s'\n",uid);
+	free(tmpbuf);
+
+	int gmt=mktime((struct tm*)&(pd->entry->date));
+	printf("gmt=%d\n",gmt);
+	//free(outbuf);
+	CURL *c = browser_curl(pd->blog->b,"http://www.okcupid.com/journal");
+	browser_set_post(c,
+		"tuid",((okcupid_priv*)pd->blog->_priv)->tuid,
+		"update","1",
+		"postid",uid,
+		"postgmt",14,
+		"title", pd->title,
+		"content",pd->content,
+		"commentsecurity","0",
+		"commentapproval","0",
+		"postsecurity","0",
+		"formatting","0",
+		"add","Publish",
+		"trackback_username","",
+		"trackback_boardid","",
+		"trackback_url","",
+		"trackback_title","",
+		"trackback_uservar","",
+		"trackback_hideresponseline","",
+		NULL);
+	//printf("outbuf = '%s'\n",outbuf);
+	//curl_easy_setopt(c,CURLOPT_POSTFIELDS,outbuf);
+	getfile(c,NULL, false, &retcode, end_post, pd);
+}
+
+static void end_post(char *tmpbuf, void *data)
+{
+	post_data *pd = data;
+	free(tmpbuf);
 		
-	free(outbuf);
-	free(title);
-	free(content);
-	return true;
+	free(pd->title);
+	free(pd->content);
+	free(pd);
+	pd->callback(true);
 }
 
 static void cleanup(blog_state *blog)

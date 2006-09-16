@@ -2,9 +2,8 @@
  * Copyright (C) Tom Parker
  *
  * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of the
- * License, or (at your option) any later version.
+ * modify it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -36,6 +35,7 @@
 #include "blog.h"
 #include "common.h"
 #include <glib.h>
+#include <pthread.h>
 
 /* safe_realloc is necessary for windows
  * Most Unixes do realloc() fine with a NULL pointer, but windows segfaults on one.
@@ -94,15 +94,16 @@ size_t nullstream( void *ptr, size_t size, size_t nmemb, void *stream)
 	return size*nmemb;
 }
 
-char *getfile(CURL *c, const char *filename, bool ignorefile, long *retcode)
+void getfile(CURL *c, const char *filename, bool ignorefile, long *retcode, void (*callback)(char *, void*), void *data)
 {
+	if (filename!=NULL)
+		printf("filename %s\n",filename);	
 	if (filename==NULL || !exists(filename) ||ignorefile)
 	{
 		FILE *curr = NULL;
 		if (filename!=NULL)
 		{
 			curr = fopen(filename,"w");
-			printf("filename %s\n",filename);
 			assert(curr!=NULL);
 			curl_easy_setopt(c,CURLOPT_WRITEDATA,curr);
 		}	
@@ -116,47 +117,15 @@ char *getfile(CURL *c, const char *filename, bool ignorefile, long *retcode)
 			fclose(curr);
 	}
 	if (filename==NULL)
-		return NULL;
+		callback(NULL,data);
 	else	
-		return readfile(filename);
+		callback(readfile(filename),data);
 }
 
 typedef struct _char_map {
 	const char in;
 	const char *out;
 } char_map;
-
-char *url_format(CURL *c,const char *input)
-{
-	/*static const char_map mapping[] = {
-								{' ', "+" },
-								{'\n',"%0A"},
-								{'\r',"%0D"},
-								{',',"%2C"},
-								{'\'',"%27"},
-								{0}
-	};
-
-	char *temp = calloc((strlen(input)*3)+1,sizeof(char));
-	const char_map* curr = &(mapping[0]);
-	printf("reformatting %s\n",input);
-	strcpy(temp,input);
-	while (curr->out!=NULL)
-	{
-		char *ind = strchr(temp,curr->in);
-		while (ind!=NULL)
-		{
-			int idx = ind-temp;
-			memmove(&(temp[idx])+strlen(curr->out),&temp[idx]+1,strlen(&(temp[idx])+1));
-			memcpy(&temp[idx],curr->out,strlen(curr->out));
-			ind = strchr(temp,curr->in);
-			//printf("reformatting %s\n",temp);
-		}	
-		curr++;
-	}
-	return temp;*/
-	return curl_escape(input,strlen(input));
-}
 
 const blog_system* blog_choose(const char*name)
 {
@@ -181,4 +150,45 @@ char *findandreplace(const char *inp, const replace *items, int count)
 	return out;
 }
 
+void ready_init(ThreadReady *th) {
+	th->ready = false;
+	pthread_cond_init(&th->cond, NULL);
+	pthread_mutex_init(&th->mutex, NULL);
+}
 
+void ready_wait(ThreadReady *th) {
+	pthread_mutex_lock(&th->mutex);
+	while (!th->ready) {
+		pthread_cond_wait(&th->cond, &th->mutex);
+	}
+	pthread_mutex_unlock(&th->mutex);
+}
+
+void ready_wait_time(ThreadReady *th, uint16_t seconds) {
+	struct timespec timeout;
+	struct timeval now;
+	int ret=0;
+	gettimeofday(&now,NULL);
+	timeout.tv_sec = now.tv_sec + seconds;
+	timeout.tv_nsec = now.tv_usec*1000;
+	pthread_mutex_lock(&th->mutex);
+	while (!th->ready && ret!=ETIMEDOUT) {
+		ret = pthread_cond_timedwait(&th->cond, &th->mutex, &timeout);
+	}
+	pthread_mutex_unlock(&th->mutex);
+}
+
+void ready_done(ThreadReady *th) {
+	pthread_mutex_lock(&th->mutex);
+	th->ready = true;
+	pthread_cond_broadcast(&th->cond);
+	pthread_mutex_unlock(&th->mutex);
+}
+
+bool ready_test(ThreadReady *th) {
+	bool ret;
+	pthread_mutex_lock(&th->mutex);
+	ret = th->ready;
+	pthread_mutex_unlock(&th->mutex);
+	return ret;
+}

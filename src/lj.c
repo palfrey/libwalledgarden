@@ -23,6 +23,13 @@ replace items[] = {
 				{"</li><br /></ul>","</li></ul>"}
 				};
 
+ThreadReady post_done;
+
+void end_triple(bool success)
+{
+	ready_done(&post_done);
+}
+
 void print_triple(void* user_data, const raptor_statement* triple) 
 {
 	if (triple->subject_type != RAPTOR_IDENTIFIER_TYPE_ANONYMOUS)
@@ -62,7 +69,9 @@ void print_triple(void* user_data, const raptor_statement* triple)
 			if (i==post_count)
 			{
 				printf("posting!\n");
-				bs->post(&blog,&submit);
+				ready_init(&post_done);
+				bs->post(&blog,&submit, &end_triple);
+				ready_wait(&post_done);
 			}
 			free(submit.content);
 			free(submit.title);
@@ -76,6 +85,8 @@ void print_triple(void* user_data, const raptor_statement* triple)
 	/*raptor_print_statement_as_ntriples(triple, stdout);
 	fputc('\n', stdout);*/
 } 
+
+void run_lj(bool, void *);
 
 int main(int argc, char **argv)
 {
@@ -98,8 +109,21 @@ int main(int argc, char **argv)
 		#endif
 	}
 
-	bs->init(&blog,username,password);
-	blog_entry ** entries = bs->entries(&blog, true);
+	bs->init(&blog,username,password, run_lj);
+	return 0;
+}
+
+void use_entries(blog_entry ** entries);
+
+void run_lj(bool success, void * junk)
+{
+	bs->entries(&blog, true, use_entries);
+}
+
+void parse_lj(char *tmpbuf, void *junk);
+
+void use_entries(blog_entry ** entries)
+{
 	blog_entry **curr = entries;
 	while (curr!=NULL && *curr!=NULL)
 	{
@@ -116,10 +140,12 @@ int main(int argc, char **argv)
 	}
 	
 	browser *b = browser_init("cookies");
-	CURL *c = browser_curl(b);
-	curl_easy_setopt(c,CURLOPT_URL,"http://palfrey.livejournal.com/data/rss");
-	char *tmpbuf = getfile(c,CACHE_DIR DIRSEP "rss",false, NULL);
+	CURL *c = browser_curl(b,"http://palfrey.livejournal.com/data/rss");
+	getfile(c,CACHE_DIR DIRSEP "rss",false, NULL, parse_lj, NULL);
+}
 
+void parse_lj(char *tmpbuf, void *junk)
+{
 	raptor_parser* rdf_parser=NULL;
 	raptor_uri *base_uri;
 
@@ -150,6 +176,6 @@ int main(int argc, char **argv)
 	bs->post(&blog,&submit);*/
 	bs->cleanup(&blog);
 	
-	return 0;
+	exit(0);
 }
 

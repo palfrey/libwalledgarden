@@ -32,7 +32,9 @@ typedef struct _browser
 
 browser * browser_init(const char *jar);
 void browser_free(browser* b);
-CURL * browser_curl(browser *b);
+CURL * browser_curl(browser *b, const char *url);
+void browser_set_post(CURL *c, ...) __attribute__((__sentinel__(0)));
+char *url_format(const char *input);
 
 #ifdef _WIN32
 #define DIRSEP "\\"
