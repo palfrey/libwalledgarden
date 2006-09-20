@@ -43,36 +43,57 @@ typedef struct _myspace_priv
 	const char *token;
 } myspace_priv;
 
-static bool login(blog_state *blog, bool ignorecache)
+typedef struct
 {
-	myspace_priv *p = (myspace_priv*)blog->_priv;
-	char * tmpbuf, *url;
-	regex_t datareg;
+	void(*callback)(bool, void *);
+	void *user_data;
+	bool ignorecache;
+	blog_state *b;
+	long retcode;
+} login_struct;
+
+static void check_code(char *tmpbuf, void *data)
+{
+	login_struct *ls = data;
+	free(tmpbuf);
+	if (ls->retcode!=0 && ls->retcode!=302)
+		ls->callback(false,ls->user_data);
+	else	
+		ls->callback(true,ls->user_data);
+}
+
+static void parse_login(char *tmpbuf, void *data)
+{
+	char *url;
 	int ret;
 	regmatch_t match[3];
 	char errbuf[255];
+	regex_t datareg;
+
+	login_struct *ls = data;
+	blog_state *blog = ls->b;
+	myspace_priv *p = (myspace_priv*)blog->_priv;
 
 	if (regcomp(&datareg, "<form action=\"(http://login.myspace.com/index.cfm\\?fuseaction=login.process&MyToken=([^\\\"]*))\" method=\"post\" name=\"theForm\" id=\"theForm\">", 0) != 0) {
 		printf("Error while compiling pattern\n");
 		exit(EXIT_FAILURE);
 	}
-	while(1)
-	{
-		CURL *c = browser_curl(blog->b,"http://www.myspace.com");
-		tmpbuf = getfile(c,CACHE_DIR DIRSEP "login", ignorecache, NULL);
 
-		ret = regexec(&datareg, tmpbuf, 3, match, 0);
-		if (ret != 0) {
-			regerror(ret, &datareg, errbuf, 255);
-			printf("Error while matching pattern (login): %s\n", errbuf);
-			if (ignorecache)
-				return false;
-			ignorecache = true;	
-			free(tmpbuf);
+	ret = regexec(&datareg, tmpbuf, 3, match, 0);
+	if (ret != 0) {
+		regerror(ret, &datareg, errbuf, 255);
+		printf("Error while matching pattern (login): %s\n", errbuf);
+		if (ls->ignorecache)
+		{
+			ls->callback(false,ls->user_data);
+			return;
 		}
-		else
-			break;
-	}		
+		ls->ignorecache = true;	
+		free(tmpbuf);
+		CURL *c = browser_curl(blog->b,"http://www.myspace.com");
+		getfile(c,CACHE_DIR DIRSEP "login", ls->ignorecache, NULL, parse_login, ls);
+		return;
+	}
 	tmpbuf[match[1].rm_eo] = '\0';
 	p->token = strdup(&tmpbuf[match[2].rm_so]);
 	url = strdup(&tmpbuf[match[1].rm_so]);
@@ -82,16 +103,20 @@ static bool login(blog_state *blog, bool ignorecache)
 	CURL *c = browser_curl(blog->b,url);
 	char *outbuf = g_strdup_printf("email=%s&password=%s&Remember=Remember&ctl00%%24Main%%24SplashDisplay%%24login%%24loginbutton.x=19&ctl00%%24Main%%24SplashDisplay%%24login%%24loginbutton.y=11",url_format(p->username),url_format(p->password));
 	curl_easy_setopt(c,CURLOPT_POSTFIELDS,outbuf);
-	long retcode=0;
-	tmpbuf = getfile(c,CACHE_DIR DIRSEP "logged",ignorecache,&retcode);
-	free(tmpbuf);
-	if (retcode!=0 && retcode!=302)
-		return false;
-	else	
-		return true;
+	getfile(c,CACHE_DIR DIRSEP "logged",ls->ignorecache,&ls->retcode,check_code,ls);
 }
 
-static bool blog_init(blog_state *blog, const char *username, const char *password)
+static void login(blog_state *blog, bool ignorecache, void(*callback)(bool, void *), void* data)
+{
+	CURL *c = browser_curl(blog->b,"http://www.myspace.com");
+	login_struct *ls = (login_struct*)malloc(sizeof(login_struct));
+	ls->callback = callback;
+	ls->user_data = data;
+	ls->b = blog;
+	getfile(c,CACHE_DIR DIRSEP "login", ignorecache, NULL, parse_login, ls);
+}
+
+static void blog_init(blog_state *blog, const char *username, const char *password, void(*callback)(bool,void*))
 {
 	blog->b = browser_init(COOKIE_FILE);
 	blog->_priv = malloc(sizeof(myspace_priv));
@@ -99,53 +124,117 @@ static bool blog_init(blog_state *blog, const char *username, const char *passwo
 
 	p->username = strdup(username);
 	p->password = strdup(password);
-	return login(blog, false);
+	login(blog, false, callback,NULL);
 }
 
-static blog_entry ** get_entries(blog_state *blog, bool ignorecache)
+typedef struct
 {
-	browser *b = blog->b;
-	char * tmpbuf;
-	char *url;
-	myspace_priv *p = (myspace_priv*)blog->_priv;
-	blog_entry **entries = (blog_entry**)calloc(1,sizeof(blog_entry*));
-	int count = 0;
+	int limit;
+	long retcode;
+	blog_state *blog;
+	bool ignorecache;
+	void (*callback)(blog_entry **);
+	bool handle_data;
+} journal_storage;
 
-	regex_t datareg,hrefreg,moodreg;
-	regmatch_t match[3];
-	int ret;
-	char errbuf[255];
-	if (regcomp(&datareg, "(http://blog.myspace.com/index.cfm\\?fuseaction=blog.ListAll&amp;friendID=\\d+)", 0) != 0) {
-		printf("Error while compiling pattern\n");
+static void do_entry(char *tmpbuf, void *data);
+
+static void get_entries(blog_state *blog, bool ignorecache, void (*callback)(blog_entry **))
+{
+	journal_storage *js = (journal_storage*)calloc(1,sizeof(journal_storage));
+	js->blog = blog;
+	js->ignorecache = ignorecache;
+	js->callback = callback;
+	js->handle_data = false;
+	js->limit = 0;
+	do_entry(NULL, js);
+}
+
+static void entry_login(bool ok, void *data)
+{
+	journal_storage *js = data;
+	if (!ok)
+	{
+		printf("Much failing\n");
 		exit(EXIT_FAILURE);
 	}
-	url = g_strdup_printf("http://home.myspace.com/index.cfm?fuseaction=user&MyToken=%s",p->token);
+	js->handle_data = false;
+	do_entry(NULL,js);
+}
+
+static void parse_blog(char *tmpbuf, void *data);
+
+static void do_entry(char *tmpbuf, void *data)
+{
+	journal_storage *js = data;
+	myspace_priv *p = (myspace_priv*)js->blog->_priv;
+	regmatch_t match[3];
+	char *url;
 	while(1)
 	{
-		CURL *c = browser_curl(blog->b, url);
-		tmpbuf = getfile(c,CACHE_DIR DIRSEP "home",ignorecache,NULL);
-		ret = regexec(&datareg, tmpbuf, 2, match, 0);
-		if (ret != 0) {
-			regerror(ret, &datareg, errbuf, 255);
-			printf("Error while matching pattern (blog): %s\n", errbuf);
-			if (ignorecache)
+		if (js->handle_data)
+		{
+			regex_t datareg;
+			int ret;
+			char errbuf[255];
+			if (regcomp(&datareg, "(http://blog.myspace.com/index.cfm\\?fuseaction=blog.ListAll&amp;friendID=\\d+)", 0) != 0) {
+				printf("Error while compiling pattern\n");
 				exit(EXIT_FAILURE);
-			if (strstr(tmpbuf,"Object moved to <a href=\"http://login.myspace.com/")!=NULL)
-				login(blog,true);
-			ignorecache = true;
-			free(tmpbuf);
+			}
+			ret = regexec(&datareg, tmpbuf, 2, match, 0);
+			if (ret != 0) {
+				regerror(ret, &datareg, errbuf, 255);
+				printf("Error while matching pattern (blog): %s\n", errbuf);
+				if (js->ignorecache)
+					exit(EXIT_FAILURE);
+				if (strstr(tmpbuf,"Object moved to <a href=\"http://login.myspace.com/")!=NULL)
+				{
+					login(js->blog, js->ignorecache, entry_login, js);
+					return;
+				}
+				free(tmpbuf);
+			}
+			else
+				break;
+			js->ignorecache = true;	
+			js->handle_data = false;
+			return;
 		}
-		else
+		if(js->limit==2)
 			break;
+		
+		url = g_strdup_printf("http://home.myspace.com/index.cfm?fuseaction=user&MyToken=%s",p->token);
+		CURL *c = browser_curl(js->blog->b, url);
+		js->limit++;
+		js->handle_data = true;
+		getfile(c,CACHE_DIR DIRSEP "home", js->ignorecache, &js->retcode,do_entry,js);
+		free(url);
+		return;
 	}
+	if (js->limit == 2)
+	{
+		printf("Much failing\n");
+		exit(EXIT_FAILURE);
+	}	
+	
 	tmpbuf[match[1].rm_eo] = '\0';
-	free(url);
 	url = strdup(&tmpbuf[match[1].rm_so]);
 	free(tmpbuf);
 	
-	CURL *c = browser_curl(b,url);
-	tmpbuf = getfile(c,CACHE_DIR DIRSEP "blog", ignorecache, NULL);
+	CURL *c = browser_curl(js->blog->b,url);
+	getfile(c,CACHE_DIR DIRSEP "blog", js->ignorecache, NULL, parse_blog, js);
 	free(url);
+}
+
+static void parse_blog(char *tmpbuf, void *data)
+{
+	journal_storage *js = data;
+	regex_t hrefreg,moodreg,datareg;
+	int count = 0;
+	int ret;
+	regmatch_t match[3];
+
+	blog_entry **entries = (blog_entry**)calloc(1,sizeof(blog_entry*));
 	if (regcomp(&datareg, "<p class=\"blog([^\\\"]*)\">(.*?)</p>", REG_DOTALL|REG_NEWLINE) != 0) {
 		printf("Error while compiling pattern\n");
 		exit(EXIT_FAILURE);
@@ -251,7 +340,7 @@ static blog_entry ** get_entries(blog_state *blog, bool ignorecache)
 		ret = regexec(&datareg, &tmpbuf[index], 3, match, 0);
 	}
 	entries[count] = NULL;
-	return entries;
+	js->callback(entries);
 }
 
 static void cleanup(blog_state *blog)
@@ -259,26 +348,68 @@ static void cleanup(blog_state *blog)
 	browser_free(blog->b);
 }
 
-static bool blog_post(blog_state *blog, const blog_entry* entry)
+typedef struct
+{
+	blog_state *blog;
+	const blog_entry* entry;
+	void (*callback)(bool);
+} post_data;
+
+static void publish(char *tmpbuf, void *data);
+
+static void blog_post(blog_state *blog, const blog_entry* entry, void (*callback)(bool))
 {
 	myspace_priv *p = (myspace_priv*)blog->_priv;
+	post_data * pd = (post_data*)malloc(sizeof(post_data));
+	pd->blog = blog;
+	pd->entry = entry;
+	pd->callback = callback;
+
 	char * url;
 	CURL *c;
-	char * tmpbuf;
-	regex_t datareg;
-	regmatch_t match[2];
-	int ret;
 	
 	url = g_strdup_printf("http://blog.myspace.com/index.cfm?fuseaction=blog.previewBlog&Mytoken=%s",p->token);
 	c = browser_curl(blog->b,url);
 
-	char *title = url_format(entry->title);
-	char *content = url_format(entry->content);
-	char *outbuf = g_strdup_printf("blogID=-1&postMonth=%d&postDay=%d&postYear=%d&postHour=%d&postMinute=%d&postTimeMarker=%s&subject=%s&BlogCategoryID=0&editor=false&body=%s&CurrentlyASIN=&CurrentlyProductName=&CurrentlyProductBy=&CurrentlyImageURL=&CurrentlyProductURL=&CurrentlyProductReleaseDate=&CurrentlyProductType=&Mode=music&MoodSetID=7&MoodID=0&MoodOther=&BlogViewingPrivacyID=0&Enclosure=",entry->date.tm_mon,entry->date.tm_mday,entry->date.tm_year+1900,entry->date.tm_hour%12,entry->date.tm_min,entry->date.tm_hour>=12?"PM":"AM",title,content);
-	curl_easy_setopt(c,CURLOPT_POSTFIELDS,outbuf);
-	tmpbuf = getfile(c,CACHE_DIR DIRSEP "post", true, NULL);
-	free(outbuf);
+	browser_set_post(c,
+		"blogID","-1",
+		"postMonth", entry->date.tm_mon,
+		"postDay", entry->date.tm_mday,
+		"postYear",entry->date.tm_year+1900,
+		"postHour", entry->date.tm_hour%12,
+		"postMinute", entry->date.tm_min,
+		"postTimeMarker", entry->date.tm_hour>=12?"PM":"AM",
+		"subject", pd->entry->title,
+		"BlogCategoryID", "0",
+		"editor","false",
+		"body", pd->entry->content,
+		"CurrentlyASIN","",
+		"CurrentlyProductName","",
+		"CurrentlyProductBy","",
+		"CurrentlyImageURL","",
+		"CurrentlyProductURL","",
+		"CurrentProductReleaseDate","",
+		"CurrentlyProductType","",
+		"Mode","music",
+		"MoodSetID","7",
+		"MoodID","0",
+		"MoodOther","",
+		"BlogViewingPrivacyID","0",
+		"Enclosure","",
+		NULL);
+	getfile(c,CACHE_DIR DIRSEP "post", true, NULL, publish, pd);
 	free(url);
+}
+
+static void end_post(char *tmpbuf, void *data);
+
+static void publish(char *tmpbuf, void *data)
+{
+	post_data *pd = data;
+	regex_t datareg;
+	const blog_entry* entry = pd->entry;
+	regmatch_t match[2];
+	int ret;
 
 	if (regcomp(&datareg, "<input type=\"hidden\" name=\"hash\" value=\"([^\"]*)", 0) != 0) {
 		printf("Error while compiling pattern\n");
@@ -288,18 +419,49 @@ static bool blog_post(blog_state *blog, const blog_entry* entry)
 	if (ret != 0)
 	{
 		printf("Panic! No hash!\n");
-		return false;
+		pd->callback(false);
 	}
 	tmpbuf[match[1].rm_eo] = '\0';
-	c = browser_curl(blog->b,"http://blog.myspace.com/index.cfm?fuseaction=blog.processCreate");
+	CURL *c = browser_curl(pd->blog->b,"http://blog.myspace.com/index.cfm?fuseaction=blog.processCreate");
 	
-	outbuf = g_strdup_printf("blogID=-1&postMonth=%d&postDay=%d&postYear=%d&postHour=%d&postMinute=%d&postTimeMarker=%s&subject=%s&BlogCategoryID=0&editor=false&body=%s&CurrentlyASIN=&CurrentlyProductName=&CurrentlyProductBy=&CurrentlyImageURL=&CurrentlyProductURL=&CurrentlyProductReleaseDate=&CurrentlyProductType=&Mode=music&MoodSetID=7&MoodID=0&MoodOther=&BlogViewingPrivacyID=0&&hash=%s&Enclosure=",entry->date.tm_mon,entry->date.tm_mday,entry->date.tm_year+1900,entry->date.tm_hour%12,entry->date.tm_min,entry->date.tm_hour>=12?"PM":"AM",title,content, &tmpbuf[match[1].rm_so]);
-	curl_easy_setopt(c,CURLOPT_POSTFIELDS,outbuf);
+	browser_set_post(c,
+		"blogID","-1",
+		"postMonth", entry->date.tm_mon,
+		"postDay", entry->date.tm_mday,
+		"postYear",entry->date.tm_year+1900,
+		"postHour", entry->date.tm_hour%12,
+		"postMinute", entry->date.tm_min,
+		"postTimeMarker", entry->date.tm_hour>=12?"PM":"AM",
+		"subject", pd->entry->title,
+		"BlogCategoryID", "0",
+		"editor","false",
+		"body", pd->entry->content,
+		"CurrentlyASIN","",
+		"CurrentlyProductName","",
+		"CurrentlyProductBy","",
+		"CurrentlyImageURL","",
+		"CurrentlyProductURL","",
+		"CurrentProductReleaseDate","",
+		"CurrentlyProductType","",
+		"Mode","music",
+		"MoodSetID","7",
+		"MoodID","0",
+		"MoodOther","",
+		"BlogViewingPrivacyID","0",
+		"hash", &tmpbuf[match[1].rm_so],
+		"Enclosure","",
+		NULL);
 	free(tmpbuf);
-	tmpbuf = getfile(c,CACHE_DIR DIRSEP "posted", true, NULL);
-	free(outbuf);
+	getfile(c,CACHE_DIR DIRSEP "posted", true, NULL, end_post, pd);
+}
 
-	return true;
+static void end_post(char *tmpbuf, void *data)
+{
+	post_data *pd = data;
+	free(tmpbuf);
+		
+	free(pd);
+	pd->callback(true);
 }
 
 const blog_system myspace_blog_system = {blog_init,get_entries,blog_post, cleanup};

@@ -49,7 +49,7 @@ typedef struct
 	void *user_data;
 } login_struct;
 
-void parse_login(char *tmpbuf, void *data)
+static void parse_login(char *tmpbuf, void *data)
 {
 	login_struct *ls = data;
 	if (strstr(tmpbuf,"Sorry, your password didn't match")!=NULL)
@@ -65,13 +65,12 @@ static void login(blog_state *blog, bool ignorecache, void(*callback)(bool, void
 {
 	okcupid_priv *p = (okcupid_priv*)blog->_priv;
 	CURL *c = browser_curl(blog->b,"http://www.okcupid.com/login");
-	long retcode;
 	login_struct *ls = (login_struct*)malloc(sizeof(login_struct));
 	ls->callback = callback;
 	ls->user_data = data;
 	char *outbuf = g_strdup_printf("username=%s&password=%s&p=%%2Fhome&submit=Login",p->username,p->password);
 	curl_easy_setopt(c,CURLOPT_POSTFIELDS,outbuf);
-	getfile(c,CACHE_DIR DIRSEP "login", ignorecache, &retcode, parse_login, ls);
+	getfile(c,CACHE_DIR DIRSEP "login", ignorecache, NULL, parse_login, ls);
 }
 
 static void blog_init(blog_state *blog, const char *username, const char *password, void(*callback)(bool,void*))
@@ -141,7 +140,7 @@ static void do_entry(char *tmpbuf, void *data)
 		getfile(c,CACHE_DIR DIRSEP "journal", js->ignorecache, &js->retcode,do_entry,js);
 		return;
 	}
-	if (js->limit == 2)
+	if (js->limit == 2 && js->retcode!=200)
 	{
 		printf("Much failing\n");
 		exit(EXIT_FAILURE);
@@ -214,8 +213,6 @@ typedef struct
 	blog_state *blog;
 	const blog_entry* entry;
 	void (*callback)(bool);
-	char *title;
-	char *content;
 } post_data;
 
 static void date_set(char *tmpbuf, void *data);
@@ -229,12 +226,10 @@ static void blog_post(blog_state *blog, const blog_entry* entry, void (*callback
 	pd->blog = blog;
 	pd->entry = entry;
 	pd->callback = callback;
-	pd->title = url_format(entry->title);
-	pd->content = url_format(entry->content);
 	browser_set_post(c,
 		"tuid",((okcupid_priv*)blog->_priv)->tuid,
-		"title", pd->title,
-		"content",pd->content,
+		"title", entry->title,
+		"content",entry->content,
 		"commentsecurity","0",
 		"commentapproval","0",
 		"postsecurity","0",
@@ -304,9 +299,9 @@ static void more_date_set(char *tmpbuf, void *data)
 		"tuid",((okcupid_priv*)pd->blog->_priv)->tuid,
 		"update","1",
 		"postid",uid,
-		"postgmt",14,
-		"title", pd->title,
-		"content",pd->content,
+		"postgmt",g_strdup_printf("%d",gmt),
+		"title", pd->entry->title,
+		"content",pd->entry->content,
 		"commentsecurity","0",
 		"commentapproval","0",
 		"postsecurity","0",
@@ -319,8 +314,6 @@ static void more_date_set(char *tmpbuf, void *data)
 		"trackback_uservar","",
 		"trackback_hideresponseline","",
 		NULL);
-	//printf("outbuf = '%s'\n",outbuf);
-	//curl_easy_setopt(c,CURLOPT_POSTFIELDS,outbuf);
 	getfile(c,NULL, false, &retcode, end_post, pd);
 }
 
@@ -329,8 +322,6 @@ static void end_post(char *tmpbuf, void *data)
 	post_data *pd = data;
 	free(tmpbuf);
 		
-	free(pd->title);
-	free(pd->content);
 	free(pd);
 	pd->callback(true);
 }

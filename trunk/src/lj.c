@@ -75,8 +75,8 @@ void print_triple(void* user_data, const raptor_statement* triple)
 			}
 			free(submit.content);
 			free(submit.title);
-			/*if (i==post_count)
-				exit(1);*/
+			if (i==post_count)
+				exit(1);
 			memset(&submit,0,sizeof(submit));
 		}	
 	}	
@@ -117,7 +117,7 @@ void use_entries(blog_entry ** entries);
 
 void run_lj(bool success, void * junk)
 {
-	bs->entries(&blog, true, use_entries);
+	bs->entries(&blog, false, use_entries);
 }
 
 void parse_lj(char *tmpbuf, void *junk);
