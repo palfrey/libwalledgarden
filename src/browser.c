@@ -81,8 +81,17 @@ void browser_set_post(CURL *c, ...)
 		{
 			char *temp;
 			key = url_format(key);
-			value = url_format(va_arg (ap, char*));
-			temp = g_strdup_printf("%s=%s",key,value);
+			temp = va_arg (ap,char*);
+			if ((int)temp<10000) // assume number...
+			{
+				int val = (int)temp;
+				temp = g_strdup_printf("%s=%d",key,val);
+			}
+			else
+			{
+				value = url_format(temp);
+				temp = g_strdup_printf("%s=%s",key,value);
+			}
 			if (buf == NULL)
 				buf =  temp;
 			else
