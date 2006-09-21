@@ -68,11 +68,27 @@ static void parse_login(char *tmpbuf, void *data)
 	int ret;
 	regmatch_t match[3];
 	char errbuf[255];
-	regex_t datareg;
+	regex_t datareg, already;
 
 	login_struct *ls = data;
 	blog_state *blog = ls->b;
 	myspace_priv *p = (myspace_priv*)blog->_priv;
+
+   	if (regcomp(&already, "http://collect.myspace.com/index.cfm\\?fuseaction=signout&MyToken=([^\\\"]*)\"", 0) != 0) {
+		printf("Error while compiling pattern (already)\n");
+		exit(EXIT_FAILURE);
+	}
+	ret = regexec(&already, tmpbuf, 2, match, 0);
+	if (ret == 0)
+	{
+		printf("already logged in\n");
+		tmpbuf[match[1].rm_eo] = '\0';
+		p->token = strdup(&tmpbuf[match[1].rm_so]);
+		printf("token is %s\n",p->token);
+		ls->retcode = 302;
+		check_code(NULL,data);
+		return;
+	}
 
 	if (regcomp(&datareg, "<form action=\"(http://login.myspace.com/index.cfm\\?fuseaction=login.process&MyToken=([^\\\"]*))\" method=\"post\" name=\"theForm\" id=\"theForm\">", 0) != 0) {
 		printf("Error while compiling pattern\n");
@@ -90,8 +106,8 @@ static void parse_login(char *tmpbuf, void *data)
 		}
 		ls->ignorecache = true;	
 		free(tmpbuf);
-		CURL *c = browser_curl(blog->b,"http://www.myspace.com");
-		getfile(c,CACHE_DIR DIRSEP "login", ls->ignorecache, NULL, parse_login, ls);
+		Request *req = browser_curl(blog->b,"http://www.myspace.com");
+		getfile(req,CACHE_DIR DIRSEP "login", ls->ignorecache, NULL, parse_login, ls);
 		return;
 	}
 	tmpbuf[match[1].rm_eo] = '\0';
@@ -100,20 +116,20 @@ static void parse_login(char *tmpbuf, void *data)
 	printf("token is %s\n",p->token);
 	free(tmpbuf);
 
-	CURL *c = browser_curl(blog->b,url);
+	Request *req = browser_curl(blog->b,url);
 	char *outbuf = g_strdup_printf("email=%s&password=%s&Remember=Remember&ctl00%%24Main%%24SplashDisplay%%24login%%24loginbutton.x=19&ctl00%%24Main%%24SplashDisplay%%24login%%24loginbutton.y=11",url_format(p->username),url_format(p->password));
-	curl_easy_setopt(c,CURLOPT_POSTFIELDS,outbuf);
-	getfile(c,CACHE_DIR DIRSEP "logged",ls->ignorecache,&ls->retcode,check_code,ls);
+	curl_easy_setopt(req,CURLOPT_POSTFIELDS,outbuf);
+	getfile(req,CACHE_DIR DIRSEP "logged",ls->ignorecache,&ls->retcode,check_code,ls);
 }
 
 static void login(blog_state *blog, bool ignorecache, void(*callback)(bool, void *), void* data)
 {
-	CURL *c = browser_curl(blog->b,"http://www.myspace.com");
+	Request *req = browser_curl(blog->b,"http://www.myspace.com");
 	login_struct *ls = (login_struct*)malloc(sizeof(login_struct));
 	ls->callback = callback;
 	ls->user_data = data;
 	ls->b = blog;
-	getfile(c,CACHE_DIR DIRSEP "login", ignorecache, NULL, parse_login, ls);
+	getfile(req,CACHE_DIR DIRSEP "login", ignorecache, NULL, parse_login, ls);
 }
 
 static void blog_init(blog_state *blog, const char *username, const char *password, void(*callback)(bool,void*))
@@ -204,10 +220,10 @@ static void do_entry(char *tmpbuf, void *data)
 			break;
 		
 		url = g_strdup_printf("http://home.myspace.com/index.cfm?fuseaction=user&MyToken=%s",p->token);
-		CURL *c = browser_curl(js->blog->b, url);
+		Request *req = browser_curl(js->blog->b, url);
 		js->limit++;
 		js->handle_data = true;
-		getfile(c,CACHE_DIR DIRSEP "home", js->ignorecache, &js->retcode,do_entry,js);
+		getfile(req,CACHE_DIR DIRSEP "home", js->ignorecache, &js->retcode,do_entry,js);
 		free(url);
 		return;
 	}
@@ -221,8 +237,8 @@ static void do_entry(char *tmpbuf, void *data)
 	url = strdup(&tmpbuf[match[1].rm_so]);
 	free(tmpbuf);
 	
-	CURL *c = browser_curl(js->blog->b,url);
-	getfile(c,CACHE_DIR DIRSEP "blog", js->ignorecache, NULL, parse_blog, js);
+	Request *req = browser_curl(js->blog->b,url);
+	getfile(req,CACHE_DIR DIRSEP "blog", js->ignorecache, NULL, parse_blog, js);
 	free(url);
 }
 
@@ -366,18 +382,13 @@ static void blog_post(blog_state *blog, const blog_entry* entry, void (*callback
 	pd->callback = callback;
 
 	char * url;
-	CURL *c;
+	Request *req;
 	
 	url = g_strdup_printf("http://blog.myspace.com/index.cfm?fuseaction=blog.previewBlog&Mytoken=%s",p->token);
-	c = browser_curl(blog->b,url);
+	req = browser_curl(blog->b,url);
 
-	browser_set_post(c,
+	browser_append_post(req,
 		"blogID","-1",
-		"postMonth", entry->date.tm_mon,
-		"postDay", entry->date.tm_mday,
-		"postYear",entry->date.tm_year+1900,
-		"postHour", entry->date.tm_hour%12,
-		"postMinute", entry->date.tm_min,
 		"postTimeMarker", entry->date.tm_hour>=12?"PM":"AM",
 		"subject", pd->entry->title,
 		"BlogCategoryID", "0",
@@ -397,7 +408,15 @@ static void blog_post(blog_state *blog, const blog_entry* entry, void (*callback
 		"BlogViewingPrivacyID","0",
 		"Enclosure","",
 		NULL);
-	getfile(c,CACHE_DIR DIRSEP "post", true, NULL, publish, pd);
+	browser_append_post_int(req,
+		"postMonth", entry->date.tm_mon+1,
+		"postDay", entry->date.tm_mday,
+		"postYear",entry->date.tm_year+1900,
+		"postHour", entry->date.tm_hour%12,
+		"postMinute", entry->date.tm_min,
+		NULL);
+		
+	getfile(req,CACHE_DIR DIRSEP "post", true, NULL, publish, pd);
 	free(url);
 }
 
@@ -422,15 +441,10 @@ static void publish(char *tmpbuf, void *data)
 		pd->callback(false);
 	}
 	tmpbuf[match[1].rm_eo] = '\0';
-	CURL *c = browser_curl(pd->blog->b,"http://blog.myspace.com/index.cfm?fuseaction=blog.processCreate");
+	Request *req = browser_curl(pd->blog->b,"http://blog.myspace.com/index.cfm?fuseaction=blog.processCreate");
 	
-	browser_set_post(c,
+	browser_append_post(req,
 		"blogID","-1",
-		"postMonth", entry->date.tm_mon,
-		"postDay", entry->date.tm_mday,
-		"postYear",entry->date.tm_year+1900,
-		"postHour", entry->date.tm_hour%12,
-		"postMinute", entry->date.tm_min,
 		"postTimeMarker", entry->date.tm_hour>=12?"PM":"AM",
 		"subject", pd->entry->title,
 		"BlogCategoryID", "0",
@@ -451,8 +465,15 @@ static void publish(char *tmpbuf, void *data)
 		"hash", &tmpbuf[match[1].rm_so],
 		"Enclosure","",
 		NULL);
+	browser_append_post_int(req,
+		"postMonth", entry->date.tm_mon+1,
+		"postDay", entry->date.tm_mday,
+		"postYear",entry->date.tm_year+1900,
+		"postHour", entry->date.tm_hour%12,
+		"postMinute", entry->date.tm_min,
+		NULL);
 	free(tmpbuf);
-	getfile(c,CACHE_DIR DIRSEP "posted", true, NULL, end_post, pd);
+	getfile(req,CACHE_DIR DIRSEP "posted", true, NULL, end_post, pd);
 }
 
 static void end_post(char *tmpbuf, void *data)

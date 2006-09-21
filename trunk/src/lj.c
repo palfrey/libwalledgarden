@@ -69,14 +69,16 @@ void print_triple(void* user_data, const raptor_statement* triple)
 			if (i==post_count)
 			{
 				printf("posting!\n");
+				if (i==post_count)
+					exit(1);
 				ready_init(&post_done);
 				bs->post(&blog,&submit, &end_triple);
 				ready_wait(&post_done);
 			}
 			free(submit.content);
 			free(submit.title);
-			if (i==post_count)
-				exit(1);
+			/*if (i==post_count)
+				exit(1);*/
 			memset(&submit,0,sizeof(submit));
 		}	
 	}	
@@ -117,6 +119,11 @@ void use_entries(blog_entry ** entries);
 
 void run_lj(bool success, void * junk)
 {
+	if (!success)
+	{
+		printf("panic! login failure\n");
+		exit(1);
+	}
 	bs->entries(&blog, false, use_entries);
 }
 
