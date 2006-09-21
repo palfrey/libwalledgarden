@@ -24,16 +24,24 @@
 #define BROWSER_H_
 
 #include <curl/curl.h>
+#include <stdbool.h>
 
 typedef struct _browser
 {
 	char *jar;
 } browser;
 
+typedef struct _Request
+{
+	char *postfields;
+	CURL *curl;
+} Request;
+
 browser * browser_init(const char *jar);
 void browser_free(browser* b);
-CURL * browser_curl(browser *b, const char *url);
-void browser_set_post(CURL *c, ...) __attribute__((__sentinel__(0)));
+Request * browser_curl(browser *b, const char *url);
+void browser_append_post(CURL *c, ...) __attribute__((__sentinel__(0)));
+void browser_append_post_int(CURL *c, ...) __attribute__((__sentinel__(0)));
 char *url_format(const char *input);
 
 #ifdef _WIN32

@@ -17,8 +17,10 @@ char * strptime (const char *buf, const char *format, struct tm *timeptr);
 #include <stdint.h>
 #include <curl/curl.h>
 
+#include "browser.h"
+
 bool exists(const char *filename);
-void getfile(CURL *c, const char *filename, bool ignorefile, long *retcode, void (*callback)(char *, void *data), void *data);
+void getfile(Request *req, const char *filename, bool ignorefile, long *retcode, void (*callback)(char *, void *data), void *data);
 
 typedef struct _replace
 {

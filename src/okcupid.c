@@ -64,13 +64,13 @@ static void parse_login(char *tmpbuf, void *data)
 static void login(blog_state *blog, bool ignorecache, void(*callback)(bool, void *), void* data)
 {
 	okcupid_priv *p = (okcupid_priv*)blog->_priv;
-	CURL *c = browser_curl(blog->b,"http://www.okcupid.com/login");
+	Request *req = browser_curl(blog->b,"http://www.okcupid.com/login");
 	login_struct *ls = (login_struct*)malloc(sizeof(login_struct));
 	ls->callback = callback;
 	ls->user_data = data;
 	char *outbuf = g_strdup_printf("username=%s&password=%s&p=%%2Fhome&submit=Login",p->username,p->password);
-	curl_easy_setopt(c,CURLOPT_POSTFIELDS,outbuf);
-	getfile(c,CACHE_DIR DIRSEP "login", ignorecache, NULL, parse_login, ls);
+	curl_easy_setopt(req,CURLOPT_POSTFIELDS,outbuf);
+	getfile(req,CACHE_DIR DIRSEP "login", ignorecache, NULL, parse_login, ls);
 }
 
 static void blog_init(blog_state *blog, const char *username, const char *password, void(*callback)(bool,void*))
@@ -134,10 +134,10 @@ static void do_entry(char *tmpbuf, void *data)
 		if(js->limit==2)
 			break;
 		
-		CURL *c  = browser_curl(js->blog->b,"http://www.okcupid.com/journal");
+		Request *req  = browser_curl(js->blog->b,"http://www.okcupid.com/journal");
 		js->limit++;
 		js->handle_data = true;
-		getfile(c,CACHE_DIR DIRSEP "journal", js->ignorecache, &js->retcode,do_entry,js);
+		getfile(req,CACHE_DIR DIRSEP "journal", js->ignorecache, &js->retcode,do_entry,js);
 		return;
 	}
 	if (js->limit == 2 && js->retcode!=200)
@@ -221,12 +221,12 @@ static void blog_post(blog_state *blog, const blog_entry* entry, void (*callback
 {
 	//char *outbuf = NULL;
 	long retcode;
-	CURL *c = browser_curl(blog->b,"http://www.okcupid.com/journal");
+	Request *req = browser_curl(blog->b,"http://www.okcupid.com/journal");
 	post_data * pd = (post_data*)malloc(sizeof(post_data));
 	pd->blog = blog;
 	pd->entry = entry;
 	pd->callback = callback;
-	browser_set_post(c,
+	browser_append_post(req,
 		"tuid",((okcupid_priv*)blog->_priv)->tuid,
 		"title", entry->title,
 		"content",entry->content,
@@ -243,9 +243,9 @@ static void blog_post(blog_state *blog, const blog_entry* entry, void (*callback
 		"trackback_hideresponseline","",
 		NULL);
 	//printf("outbuf = '%s'\n",outbuf);
-	curl_easy_setopt(c,CURLOPT_REFERER,"http://www.okcupid.com/jpost");
-	//curl_easy_setopt(c,CURLOPT_POSTFIELDS,outbuf);
-	getfile(c,CACHE_DIR DIRSEP "journal", true, &retcode, date_set, pd);
+	curl_easy_setopt(req,CURLOPT_REFERER,"http://www.okcupid.com/jpost");
+	//curl_easy_setopt(req,CURLOPT_POSTFIELDS,outbuf);
+	getfile(req,CACHE_DIR DIRSEP "journal", true, &retcode, date_set, pd);
 }
 
 static void more_date_set(char *tmpbuf, void *data);
@@ -259,9 +259,9 @@ static void date_set(char *tmpbuf, void *data)
 	if (pd->entry->date.tm_year!=0)
 	{
 		browser *b = pd->blog->b;
-		CURL *c = browser_curl(b,"http://www.okcupid.com/journal");
+		Request *req = browser_curl(b,"http://www.okcupid.com/journal");
 		long retcode;
-		getfile(c,CACHE_DIR DIRSEP "journal", true, &retcode, more_date_set, pd);
+		getfile(req,CACHE_DIR DIRSEP "journal", true, &retcode, more_date_set, pd);
 	}
 	else	
 		end_post(NULL,pd);
@@ -271,7 +271,7 @@ static void more_date_set(char *tmpbuf, void *data)
 {
 	post_data *pd = data;
 	regex_t datareg;
-	//curl_easy_cleanup(c);
+	//curl_easy_cleanup(req);
 	if (regcomp(&datareg, "\\/jpost\\?edit=(\\d+)", 0) != 0) {
 		printf("Error while compiling pattern\n");
 		exit(EXIT_FAILURE);
@@ -294,8 +294,8 @@ static void more_date_set(char *tmpbuf, void *data)
 	int gmt=mktime((struct tm*)&(pd->entry->date));
 	printf("gmt=%d\n",gmt);
 	//free(outbuf);
-	CURL *c = browser_curl(pd->blog->b,"http://www.okcupid.com/journal");
-	browser_set_post(c,
+	Request *req = browser_curl(pd->blog->b,"http://www.okcupid.com/journal");
+	browser_append_post(req,
 		"tuid",((okcupid_priv*)pd->blog->_priv)->tuid,
 		"update","1",
 		"postid",uid,
@@ -314,7 +314,7 @@ static void more_date_set(char *tmpbuf, void *data)
 		"trackback_uservar","",
 		"trackback_hideresponseline","",
 		NULL);
-	getfile(c,NULL, false, &retcode, end_post, pd);
+	getfile(req,NULL, false, &retcode, end_post, pd);
 }
 
 static void end_post(char *tmpbuf, void *data)

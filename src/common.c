@@ -94,8 +94,13 @@ size_t nullstream( void *ptr, size_t size, size_t nmemb, void *stream)
 	return size*nmemb;
 }
 
-void getfile(CURL *c, const char *filename, bool ignorefile, long *retcode, void (*callback)(char *, void*), void *data)
+void getfile(Request *req, const char *filename, bool ignorefile, long *retcode, void (*callback)(char *, void*), void *data)
 {
+	if (req->postfields!=NULL)
+	{
+		printf("getfile with postfields = %s\n",req->postfields);
+		curl_easy_setopt(req->curl,CURLOPT_POSTFIELDS,req->postfields);
+	}
 	if (filename!=NULL)
 		printf("filename %s\n",filename);	
 	if (filename==NULL || !exists(filename) ||ignorefile)
@@ -105,14 +110,14 @@ void getfile(CURL *c, const char *filename, bool ignorefile, long *retcode, void
 		{
 			curr = fopen(filename,"w");
 			assert(curr!=NULL);
-			curl_easy_setopt(c,CURLOPT_WRITEDATA,curr);
+			curl_easy_setopt(req->curl,CURLOPT_WRITEDATA,curr);
 		}	
 		else
-			curl_easy_setopt(c,CURLOPT_WRITEFUNCTION,nullstream);
-		curl_easy_perform(c);
+			curl_easy_setopt(req->curl,CURLOPT_WRITEFUNCTION,nullstream);
+		curl_easy_perform(req->curl);
 		if (retcode!=NULL)
-			curl_easy_getinfo(c,CURLINFO_RESPONSE_CODE, retcode);
-		curl_easy_cleanup(c);
+			curl_easy_getinfo(req->curl,CURLINFO_RESPONSE_CODE, retcode);
+		curl_easy_cleanup(req->curl);
 		if (curr!=NULL)
 			fclose(curr);
 	}
