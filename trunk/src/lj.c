@@ -1,9 +1,9 @@
 #define RAPTOR_STATIC
 #define _GNU_SOURCE
 #include <string.h>
-#include "common.h"
+#include "browser.h"
 #include <raptor.h>
-#include "blog.h"
+#include "walledgarden.h"
 #include <unistd.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -65,7 +65,8 @@ void print_triple(void* user_data, const raptor_statement* triple)
 				if (strcmp(posts[i],submit.title)==0)
 					break;
 			}
-			printf("blog entry:\ntitle = '%s'\ncontent = %s\n",submit.title,submit.content);
+			printf("blog entry:\ntitle = '%s'\n",submit.title);
+			//printf("content = %s\n",submit.content);
 			if (i==post_count)
 			{
 				printf("posting!\n");
@@ -98,6 +99,11 @@ int main(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 	bs = blog_choose(argv[1]);
+	if (bs == NULL)
+	{
+		printf("'%s' is not a valid blog system\n",argv[1]);
+		exit(EXIT_FAILURE);
+	}
 
 	char *username = argv[2];
 	char *password = argv[3];
@@ -138,7 +144,7 @@ void use_entries(blog_entry ** entries)
 		printf("title = %s\n",(*curr)->title);
 		strftime(outstr,sizeof(outstr),"%Y-%m-%d",&((*curr)->date));
 		printf("date = %s\n",outstr);
-		printf("content = %s\n\n",(*curr)->content);
+		//printf("content = %s\n\n",(*curr)->content);
 
 		posts = (char**)realloc(posts,(post_count+1)*sizeof(char*));
 		posts[post_count] = strdup((*curr)->title);

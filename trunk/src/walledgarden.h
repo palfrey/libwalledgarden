@@ -26,6 +26,8 @@ typedef struct _blog_system
 	void (*cleanup)(blog_state *blog);
 } blog_system;
 
+void walledgarden_init();
+
 const blog_system* blog_choose(const char *name);
 
 #endif
