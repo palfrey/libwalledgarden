@@ -33,7 +33,6 @@
 #include <pcreposix.h>
 #include "browser.h"
 #include "cookies.h"
-#include "common.h"
 #include "blog.h"
 
 typedef struct _okcupid_priv
@@ -52,7 +51,8 @@ typedef struct
 static void parse_login(char *tmpbuf, void *data)
 {
 	login_struct *ls = data;
-	if (strstr(tmpbuf,"Sorry, your password didn't match")!=NULL)
+	//if (strstr(tmpbuf,"Sorry, your password didn't match")!=NULL)
+	if (strstr(tmpbuf,"I already have an account")!=NULL)
 	{
 		printf("Password failure!\n");
 		ls->callback(false, ls->user_data);
@@ -68,8 +68,12 @@ static void login(blog_state *blog, bool ignorecache, void(*callback)(bool, void
 	login_struct *ls = (login_struct*)malloc(sizeof(login_struct));
 	ls->callback = callback;
 	ls->user_data = data;
-	char *outbuf = g_strdup_printf("username=%s&password=%s&p=%%2Fhome&submit=Login",p->username,p->password);
-	curl_easy_setopt(req,CURLOPT_POSTFIELDS,outbuf);
+	browser_append_post(req,
+		"username",p->username,
+		"password",p->password,
+		"p","/home",
+		"submit","login",
+		NULL);
 	getfile(req,CACHE_DIR DIRSEP "login", ignorecache, NULL, parse_login, ls);
 }
 
@@ -80,7 +84,7 @@ static void blog_init(blog_state *blog, const char *username, const char *passwo
 	okcupid_priv *p = (okcupid_priv*)blog->_priv;
 	p->username = strdup(username);
 	p->password = strdup(password);
-	login(blog, false, callback,NULL);
+	login(blog, true, callback,NULL);
 }
 
 typedef struct
@@ -242,9 +246,7 @@ static void blog_post(blog_state *blog, const blog_entry* entry, void (*callback
 		"trackback_uservar","",
 		"trackback_hideresponseline","",
 		NULL);
-	//printf("outbuf = '%s'\n",outbuf);
-	curl_easy_setopt(req,CURLOPT_REFERER,"http://www.okcupid.com/jpost");
-	//curl_easy_setopt(req,CURLOPT_POSTFIELDS,outbuf);
+	browser_set_referer(req,"http://www.okcupid.com/jpost");
 	getfile(req,CACHE_DIR DIRSEP "journal", true, &retcode, date_set, pd);
 }
 
@@ -271,7 +273,6 @@ static void more_date_set(char *tmpbuf, void *data)
 {
 	post_data *pd = data;
 	regex_t datareg;
-	//curl_easy_cleanup(req);
 	if (regcomp(&datareg, "\\/jpost\\?edit=(\\d+)", 0) != 0) {
 		printf("Error while compiling pattern\n");
 		exit(EXIT_FAILURE);

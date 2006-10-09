@@ -25,24 +25,34 @@
 
 #include <curl/curl.h>
 #include <stdbool.h>
+#include <stdint.h>
+#include <curl/curl.h>
+
+#define CACHE_DIR "cache"
+#define COOKIE_FILE CACHE_DIR DIRSEP "cookies"
+#if defined(_WIN32) && !defined(__CYGWIN__)
+char * strptime (const char *buf, const char *format, struct tm *timeptr);
+#else
+#ifndef __USE_XOPEN
+#define __USE_XOPEN
+#define _XOPEN_SOURCE /* glibc2 needs this */
+#endif
+#include <time.h>
+#endif
 
 typedef struct _browser
 {
 	char *jar;
 } browser;
 
-typedef struct _Request
-{
-	char *postfields;
-	CURL *curl;
-} Request;
+typedef struct _Request Request;
 
 browser * browser_init(const char *jar);
 void browser_free(browser* b);
 Request * browser_curl(browser *b, const char *url);
-void browser_append_post(CURL *c, ...) __attribute__((__sentinel__(0)));
-void browser_append_post_int(CURL *c, ...) __attribute__((__sentinel__(0)));
-char *url_format(const char *input);
+void browser_append_post(Request *req, ...) __attribute__((__sentinel__(0)));
+void browser_append_post_int(Request *req, ...) __attribute__((__sentinel__(0)));
+void browser_set_referer(Request *req, const char* referer);
 
 #ifdef _WIN32
 #define DIRSEP "\\"
@@ -50,4 +60,26 @@ char *url_format(const char *input);
 #define DIRSEP "/"
 #endif
 
+bool exists(const char *filename);
+void getfile(Request *req, const char *filename, bool ignorefile, long *retcode, void (*callback)(char *, void *data), void *data);
+
+typedef struct _replace
+{
+	const char *from;
+	const char *to;
+} replace;
+
+char *findandreplace(const char *inp, const replace *using, const int count);
+
+typedef struct {
+	bool ready;
+	pthread_cond_t cond;
+	pthread_mutex_t mutex;
+} ThreadReady;
+
+void ready_init(ThreadReady *th);
+void ready_wait(ThreadReady *th);
+void ready_wait_time(ThreadReady *th, uint16_t seconds);
+void ready_done(ThreadReady *th);
+bool ready_test(ThreadReady *th);
 #endif

@@ -32,7 +32,6 @@
 #include <pcreposix.h>
 #include "browser.h"
 #include "cookies.h"
-#include "common.h"
 #include "blog.h"
 #include <glib.h>
 
@@ -57,7 +56,11 @@ static void check_code(char *tmpbuf, void *data)
 	login_struct *ls = data;
 	free(tmpbuf);
 	if (ls->retcode!=0 && ls->retcode!=302)
+	{
+		printf("login failure (%ld)\n",ls->retcode);
+		exit(EXIT_FAILURE);
 		ls->callback(false,ls->user_data);
+	}
 	else	
 		ls->callback(true,ls->user_data);
 }
@@ -74,7 +77,7 @@ static void parse_login(char *tmpbuf, void *data)
 	blog_state *blog = ls->b;
 	myspace_priv *p = (myspace_priv*)blog->_priv;
 
-   	if (regcomp(&already, "http://collect.myspace.com/index.cfm\\?fuseaction=signout&MyToken=([^\\\"]*)\"", 0) != 0) {
+	if (regcomp(&already, "http://collect.myspace.com/index.cfm\\?fuseaction=signout&MyToken=([^\\\"]*)\"", 0) != 0) {
 		printf("Error while compiling pattern (already)\n");
 		exit(EXIT_FAILURE);
 	}
@@ -117,8 +120,13 @@ static void parse_login(char *tmpbuf, void *data)
 	free(tmpbuf);
 
 	Request *req = browser_curl(blog->b,url);
-	char *outbuf = g_strdup_printf("email=%s&password=%s&Remember=Remember&ctl00%%24Main%%24SplashDisplay%%24login%%24loginbutton.x=19&ctl00%%24Main%%24SplashDisplay%%24login%%24loginbutton.y=11",url_format(p->username),url_format(p->password));
-	curl_easy_setopt(req,CURLOPT_POSTFIELDS,outbuf);
+	browser_append_post(req,
+		"email",p->username,
+		"password",p->password,
+		"Remember","Remember",
+		"ctl00%$Main%$SplashDisplay%$login%$loginbutton.x","19",
+		"ctl00%$Main%$SplashDisplay%$login%$loginbutton.y","11",
+		NULL);
 	getfile(req,CACHE_DIR DIRSEP "logged",ls->ignorecache,&ls->retcode,check_code,ls);
 }
 
@@ -151,6 +159,9 @@ typedef struct
 	bool ignorecache;
 	void (*callback)(blog_entry **);
 	bool handle_data;
+	blog_entry **entries;
+	int count;
+	int true_entries;
 } journal_storage;
 
 static void do_entry(char *tmpbuf, void *data);
@@ -158,6 +169,9 @@ static void do_entry(char *tmpbuf, void *data);
 static void get_entries(blog_state *blog, bool ignorecache, void (*callback)(blog_entry **))
 {
 	journal_storage *js = (journal_storage*)calloc(1,sizeof(journal_storage));
+	js->entries = (blog_entry**)calloc(1,sizeof(blog_entry*));
+	js->count = 0;
+	js->true_entries = 0;
 	js->blog = blog;
 	js->ignorecache = ignorecache;
 	js->callback = callback;
@@ -201,20 +215,24 @@ static void do_entry(char *tmpbuf, void *data)
 			if (ret != 0) {
 				regerror(ret, &datareg, errbuf, 255);
 				printf("Error while matching pattern (blog): %s\n", errbuf);
-				if (js->ignorecache)
-					exit(EXIT_FAILURE);
+				/*if (js->ignorecache)
+					exit(EXIT_FAILURE);*/
 				if (strstr(tmpbuf,"Object moved to <a href=\"http://login.myspace.com/")!=NULL)
 				{
+					js->ignorecache = true;
 					login(js->blog, js->ignorecache, entry_login, js);
 					return;
 				}
 				free(tmpbuf);
 			}
 			else
+			{
+				js->limit = 0;
 				break;
+			}
 			js->ignorecache = true;	
 			js->handle_data = false;
-			return;
+			//return;
 		}
 		if(js->limit==2)
 			break;
@@ -238,19 +256,36 @@ static void do_entry(char *tmpbuf, void *data)
 	free(tmpbuf);
 	
 	Request *req = browser_curl(js->blog->b,url);
-	getfile(req,CACHE_DIR DIRSEP "blog", js->ignorecache, NULL, parse_blog, js);
+	getfile(req,CACHE_DIR DIRSEP "blog", js->ignorecache, &js->retcode, parse_blog, js);
 	free(url);
 }
+
+static replace space[] = {{" ","%20"}};
 
 static void parse_blog(char *tmpbuf, void *data)
 {
 	journal_storage *js = data;
-	regex_t hrefreg,moodreg,datareg;
-	int count = 0;
+	regex_t hrefreg,moodreg,datareg,nextreg;
 	int ret;
 	regmatch_t match[3];
+	
+	if (js->retcode == 400)
+	{
+		free(js->entries);
+		printf("tmpbuf:%s\n",tmpbuf);
+		exit(1);
+		js->count = 0;
+		js->entries = (blog_entry**)calloc(1,sizeof(blog_entry*));
+		js->ignorecache = true;
+		login(js->blog, true, entry_login, js);
+		return;
+	}
 
-	blog_entry **entries = (blog_entry**)calloc(1,sizeof(blog_entry*));
+	if (regcomp(&nextreg, "(http://blog.myspace.com/index.cfm\\?fuseaction=blog.listAll&friendID=\\d+&startID=\\d+&StartPostedDate=\\d+-\\d+-\\d+ \\d+:\\d+:\\d+&next=\\d+&page=\\d+&Mytoken=[^\"]+)\">Older", REG_DOTALL|REG_NEWLINE) != 0) {
+		printf("Error while compiling pattern\n");
+		exit(EXIT_FAILURE);
+	}
+
 	if (regcomp(&datareg, "<p class=\"blog([^\\\"]*)\">(.*?)</p>", REG_DOTALL|REG_NEWLINE) != 0) {
 		printf("Error while compiling pattern\n");
 		exit(EXIT_FAILURE);
@@ -267,96 +302,130 @@ static void parse_blog(char *tmpbuf, void *data)
 	//printf("dist = %d (%9s)\n",match[0].rm_eo,&tmpbuf[index]);
 	ret = regexec(&datareg, &tmpbuf[index], 3, match, 0);
 	if (ret !=0)
-		printf("No entries!\n");
-	entries = (blog_entry**)realloc(entries,(count+2)*sizeof(blog_entry*));
-	entries[count] = (blog_entry*)malloc(sizeof(blog_entry));
-	while (ret==0)
 	{
-		struct tm out;
-		const char * cat = &tmpbuf[index+match[1].rm_so];
-		char * content = &tmpbuf[index+match[2].rm_so];
-		tmpbuf[index+match[1].rm_eo] = '\0';
-		tmpbuf[index+match[2].rm_eo] = '\0';
-		if (strcmp(cat,"TimeStamp")==0)
-		{
-			char *ret = strptime(content,"%A, %b %d, %Y",&out);
-			char outstr[200];
-			if (ret == NULL || ret[0]!='\0')
-			{
-				printf("Ret = %s\n",ret);
-				exit(1);
-			}
-			strftime(outstr,sizeof(outstr),"%Y-%m-%d",&out);
-			//printf("Time = %s (from %s)\n\n",outstr,content);
-		}
-		else if (strcmp(cat,"Subject")==0)
-		{
-			int end;
-			regmatch_t mood[4];
-			ret = regexec(&moodreg, content, 4, mood, 0);
-			entries = (blog_entry**)realloc(entries,(count+2)*sizeof(blog_entry*));
-			entries[count] = (blog_entry*)malloc(sizeof(blog_entry));
-			if (ret==0)
-			{
-				const char *url = &content[mood[2].rm_so];
-				const char *name = &content[mood[3].rm_so];
-				content[mood[1].rm_eo] = '\0';
-				content[mood[2].rm_eo] = '\0';
-				content[mood[3].rm_eo] = '\0';
-				content = &content[mood[1].rm_so];
-				printf("mood = %s, image=%s\n",name,url);
-			}
-			while (content[0]==' ' || content[0]=='\r' || content[0]=='\t'|| content[0]=='\n')
-				content++;
-			end = strlen(content)-1;
-			//printf("c[e] = %d end=%d\n",content[end],end);	
-			while (content[end]==' ' || content[end]=='\r' || content[end]=='\t'|| content[end]=='\n')
-				end--;
-			//printf("c[e] = %d end=%d\n",content[end],end);	
-			content[end+1]='\0';
-			entries[count]->title = strdup(content);
-			printf("Subject(%d): %s\n",count,content);
-		}
-		else if (strcmp(cat,"ContentInfo")==0)
-		{
-			regmatch_t link[3];
-			int c_index = 0;
-			ret = regexec(&hrefreg, &content[c_index], 3, link, 0);
-			while (ret==0)
-			{
-				//const char * url = &content[c_index+link[1].rm_so];
-				const char * name = &content[c_index+link[2].rm_so];
-				content[c_index+link[1].rm_eo] = '\0';
-				content[c_index+link[2].rm_eo] = '\0';
-				char *st = strptime(name,"<b>%I:%M %p</b>",&out);
-				if (st!=NULL)
-				{
-					char outstr[200];
-					out.tm_sec = 0;
-					strftime(outstr,sizeof(outstr),"%Y-%m-%d %I:%M:%S %p",&out);
-					printf("Time(%d) = %s (from %s)\n",count,outstr,name);
-					memcpy(&(entries[count]->date),&out,sizeof(struct tm));
-					count++;
-				}
-				/*else
-					printf("url=%s, name=%s\n",url,name);*/
-					
-				c_index += link[0].rm_eo+1;
-				ret = regexec(&hrefreg, &content[c_index], 3, link, 0);
-			}
-			printf("\n");
-		}
-		else if (strcmp(cat,"Content")==0)
-			entries[count]->content = strdup(content);
-		else
-			printf("cat=%s, content = %s\n",cat, content);
-
-		index += match[0].rm_eo+1;
-		//printf("dist = %d (%9s)\n",match[0].rm_eo,&tmpbuf[index]);
-		ret = regexec(&datareg, &tmpbuf[index], 3, match, 0);
+		printf("No entries!\n");
+		js->entries[js->count] = NULL;
 	}
-	entries[count] = NULL;
-	js->callback(entries);
+	else
+	{
+		uint8_t skip = 0;
+		js->entries = (blog_entry**)realloc(js->entries,(js->count+2)*sizeof(blog_entry*));
+		js->entries[js->count] = (blog_entry*)malloc(sizeof(blog_entry));
+		while (ret==0)
+		{
+			struct tm out;
+			const char * cat = &tmpbuf[index+match[1].rm_so];
+			char * content = &tmpbuf[index+match[2].rm_so];
+			tmpbuf[index+match[1].rm_eo] = '\0';
+			tmpbuf[index+match[2].rm_eo] = '\0';
+			if (skip == 0 && strcmp(cat,"TimeStamp")==0)
+			{
+				char *ret = strptime(content,"%A, %b %d, %Y",&out);
+				char outstr[200];
+				if (ret == NULL || ret[0]!='\0')
+				{
+					printf("Ret = %s\n",ret);
+					exit(1);
+				}
+				strftime(outstr,sizeof(outstr),"%Y-%m-%d",&out);
+				//printf("Time = %s (from %s)\n\n",outstr,content);
+			}
+			else if (strcmp(cat,"Subject")==0)
+			{
+				int end,i;
+				regmatch_t mood[4];
+				ret = regexec(&moodreg, content, 4, mood, 0);
+				if (ret==0)
+				{
+					const char *url = &content[mood[2].rm_so];
+					const char *name = &content[mood[3].rm_so];
+					content[mood[1].rm_eo] = '\0';
+					content[mood[2].rm_eo] = '\0';
+					content[mood[3].rm_eo] = '\0';
+					content = &content[mood[1].rm_so];
+					printf("mood = %s, image=%s\n",name,url);
+				}
+				while (content[0]==' ' || content[0]=='\r' || content[0]=='\t'|| content[0]=='\n')
+					content++;
+				end = strlen(content)-1;
+				while (content[end]==' ' || content[end]=='\r' || content[end]=='\t'|| content[end]=='\n')
+					end--;
+				content[end+1]='\0';
+				if (skip>0)
+					skip--;
+				js->true_entries++;
+				if (skip==0)
+				{
+					for (i=0;i<js->count;i++)
+					{
+						if (strcmp(js->entries[i]->title,content)==0)
+							break;
+					}
+					if (i==js->count)
+					{
+						js->entries = (blog_entry**)realloc(js->entries,(js->count+2)*sizeof(blog_entry*));
+						js->entries[js->count] = (blog_entry*)malloc(sizeof(blog_entry));
+						js->entries[js->count]->title = strdup(content);
+						printf("Subject(%d): %s\n",js->count,content);
+					}
+					else
+						skip++;
+				}
+			}
+			else if (skip ==0 && strcmp(cat,"ContentInfo")==0)
+			{
+				regmatch_t link[3];
+				int c_index = 0;
+				ret = regexec(&hrefreg, &content[c_index], 3, link, 0);
+				while (ret==0)
+				{
+					//const char * url = &content[c_index+link[1].rm_so];
+					const char * name = &content[c_index+link[2].rm_so];
+					content[c_index+link[1].rm_eo] = '\0';
+					content[c_index+link[2].rm_eo] = '\0';
+					char *st = strptime(name,"<b>%I:%M %p</b>",&out);
+					if (st!=NULL)
+					{
+						char outstr[200];
+						out.tm_sec = 0;
+						strftime(outstr,sizeof(outstr),"%Y-%m-%d %I:%M:%S %p",&out);
+						printf("Time(%d) = %s (from %s)\n",js->count,outstr,name);
+						memcpy(&(js->entries[js->count]->date),&out,sizeof(struct tm));
+						js->count++;
+					}
+					/*else
+						printf("url=%s, name=%s\n",url,name);*/
+						
+					c_index += link[0].rm_eo+1;
+					ret = regexec(&hrefreg, &content[c_index], 3, link, 0);
+				}
+				printf("\n");
+			}
+			else if (skip == 0 && strcmp(cat,"Content")==0)
+				js->entries[js->count]->content = strdup(content);
+			else if (skip == 0)
+				printf("cat=%s, content = %s\n",cat, content);
+
+			index += match[0].rm_eo+1;
+			//printf("dist = %d (%9s)\n",match[0].rm_eo,&tmpbuf[index]);
+			ret = regexec(&datareg, &tmpbuf[index], 3, match, 0);
+		}
+		js->entries[js->count] = NULL;
+		ret = regexec(&nextreg, tmpbuf, 2, match, 0);
+		if (ret==0)
+		{
+			printf("older entries\n");
+			tmpbuf[match[1].rm_eo] = '\0';
+			printf("url = %s\n",&tmpbuf[match[1].rm_so]);
+
+			char *url = findandreplace(&tmpbuf[match[1].rm_so],space,1);
+			Request *req = browser_curl(js->blog->b,url);
+			char *name = g_strdup_printf(CACHE_DIR DIRSEP "blog-%d",js->true_entries);
+			getfile(req,name, js->ignorecache, &js->retcode, parse_blog, js);
+			return;
+		}
+	}
+	js->callback(js->entries);
 }
 
 static void cleanup(blog_state *blog)
