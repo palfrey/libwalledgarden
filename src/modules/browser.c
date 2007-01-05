@@ -36,10 +36,9 @@
 #include <stdarg.h>
 #include <ltdl.h>
 
-#include "okcupid.h"
-#include "myspace.h"
 #include "walledgarden.h"
 #include "browser.h"
+
 
 struct _Request
 {
@@ -109,7 +108,7 @@ size_t nullstream( void *ptr, size_t size, size_t nmemb, void *stream)
 static int grabs = 0;
 #define MAX_GRABS 10
 
-void getfile(Request *req, const char *filename, bool ignorefile, long *retcode, void (*callback)(char *, void*), void *data)
+void _getfile(Request *req, const char *filename, bool ignorefile, long *retcode, void (*callback)(char *, void*), void *data)
 {
 	if (filename!=NULL)
 		printf("filename %s\n",filename);	
@@ -151,15 +150,6 @@ void getfile(Request *req, const char *filename, bool ignorefile, long *retcode,
 		callback(readfile(filename),data);
 }
 
-const blog_system* blog_choose(const char*name)
-{
-	if (strcmp(name,"okcupid")==0)
-		return &okcupid_blog_system;
-	else if (strcmp(name,"myspace")==0)
-		return &myspace_blog_system;
-	else
-		return NULL;
-}
 
 char *findandreplace(const char *inp, const replace *items, int count)
 {
@@ -215,12 +205,15 @@ bool ready_test(ThreadReady *th) {
 	ret = th->ready;
 	pthread_mutex_unlock(&th->mutex);
 	return ret;
-}char *url_format(const char *input)
+}
+
+char *url_format(const char *input)
 {
 	return curl_escape(input,strlen(input));
 }
 
-browser * browser_init(const char *jar)
+__BEGIN_DECLS
+browser * _browser_init(const char *jar)
 {
 	browser *ret = (browser*)malloc(sizeof(browser));
 	ret->jar = (char*)malloc(strlen(jar)+1);
@@ -228,13 +221,26 @@ browser * browser_init(const char *jar)
 	return ret;
 }
 
-void browser_free(browser* b)
+void _browser_free(browser* b)
 {
 	free(b->jar);
 	free(b);
 }
 
-Request * browser_curl(browser *b, const char *url)
+void blog_state_init(blog_state *blog)
+{
+	blog->browser_init = _browser_init;
+	blog->browser_free = _browser_free;
+	blog->browser_curl = _browser_curl;
+	blog->browser_append_post = _browser_append_post;
+	blog->browser_append_post_int = _browser_append_post_int;
+	blog->browser_set_referer = _browser_set_referer;
+	blog->getfile = _getfile;
+	blog->b = blog->browser_init(COOKIE_FILE);
+}
+__END_DECLS
+
+Request * _browser_curl(browser *b, const char *url)
 {
 	Request *req = (Request*)calloc(1,sizeof(Request));
 	struct curl_slist *hdrs = NULL;
@@ -299,26 +305,23 @@ static void int_browser_append_post(Request *req, bool ints, va_list ap)
 }
 
 
-void browser_append_post(Request *req, ...)
+void _browser_append_post(Request *req, ...)
 {
 	va_list ap;
 	va_start (ap, req);
 	int_browser_append_post(req,false,ap);
 }
 
-void browser_append_post_int(Request *req, ...)
+void _browser_append_post_int(Request *req, ...)
 {
 	va_list ap;
 	va_start (ap, req);
 	int_browser_append_post(req,true,ap);
 }
 
-void browser_set_referer(Request *req, const char* referer)
+void _browser_set_referer(Request *req, const char* referer)
 {
 	curl_easy_setopt(req->curl,CURLOPT_REFERER,referer);
 }
 
-void walledgarden_init()
-{
-	lt_dlinit();
-}
+

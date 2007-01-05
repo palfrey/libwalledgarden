@@ -33,7 +33,10 @@
 #include <pcreposix.h>
 #include "browser.h"
 #include "cookies.h"
-#include "blog.h"
+#include "walledgarden.h"
+
+#define blog_name libokcupid_LTX_blog_name
+#define functions libokcupid_LTX_functions
 
 typedef struct _okcupid_priv
 {
@@ -56,6 +59,7 @@ static void parse_login(char *tmpbuf, void *data)
 	{
 		printf("Password failure!\n");
 		ls->callback(false, ls->user_data);
+		return;
 	}	
 	free(tmpbuf);
 	ls->callback(true, ls->user_data);
@@ -64,27 +68,26 @@ static void parse_login(char *tmpbuf, void *data)
 static void login(blog_state *blog, bool ignorecache, void(*callback)(bool, void *), void* data)
 {
 	okcupid_priv *p = (okcupid_priv*)blog->_priv;
-	Request *req = browser_curl(blog->b,"http://www.okcupid.com/login");
+	Request *req = blog->browser_curl(blog->b,"http://www.okcupid.com/login");
 	login_struct *ls = (login_struct*)malloc(sizeof(login_struct));
 	ls->callback = callback;
 	ls->user_data = data;
-	browser_append_post(req,
+	blog->browser_append_post(req,
 		"username",p->username,
 		"password",p->password,
 		"p","/home",
 		"submit","login",
 		NULL);
-	getfile(req,CACHE_DIR DIRSEP "login", ignorecache, NULL, parse_login, ls);
+	blog->getfile(req,CACHE_DIR DIRSEP "login", ignorecache, NULL, parse_login, ls);
 }
 
-static void blog_init(blog_state *blog, const char *username, const char *password, void(*callback)(bool,void*))
+static void blog_init(blog_state *blog, const char *username, const char *password, void(*callback)(bool,void*), void *data)
 {
-	blog->b = browser_init(COOKIE_FILE);
 	blog->_priv = malloc(sizeof(okcupid_priv));
 	okcupid_priv *p = (okcupid_priv*)blog->_priv;
 	p->username = strdup(username);
 	p->password = strdup(password);
-	login(blog, true, callback,NULL);
+	login(blog, true, callback,data);
 }
 
 typedef struct
@@ -93,18 +96,20 @@ typedef struct
 	long retcode;
 	blog_state *blog;
 	bool ignorecache;
-	void (*callback)(blog_entry **);
+	void (*callback)(blog_entry **, void *data);
+	void *user_data;
 	bool handle_data;
 } journal_storage;
 
 static void do_entry(char *tmpbuf, void *data);
 
-static void get_entries(blog_state *blog, bool ignorecache, void (*callback)(blog_entry **))
+static void get_entries(blog_state *blog, bool ignorecache, void (*callback)(blog_entry **, void *data), void *user_data)
 {
 	journal_storage *js = (journal_storage*)calloc(1,sizeof(journal_storage));
 	js->blog = blog;
 	js->ignorecache = ignorecache;
 	js->callback = callback;
+	js->user_data = user_data;
 	js->handle_data = false;
 	js->limit = 0;
 	do_entry(NULL, js);
@@ -124,6 +129,7 @@ static void entry_login(bool ok, void *data)
 static void do_entry(char *tmpbuf, void *data)
 {
 	journal_storage *js = data;
+	blog_state *blog = js->blog;
 	while(1)
 	{
 		if (js->handle_data)
@@ -138,10 +144,10 @@ static void do_entry(char *tmpbuf, void *data)
 		if(js->limit==2)
 			break;
 		
-		Request *req  = browser_curl(js->blog->b,"http://www.okcupid.com/journal");
+		Request *req = blog->browser_curl(js->blog->b,"http://www.okcupid.com/journal");
 		js->limit++;
 		js->handle_data = true;
-		getfile(req,CACHE_DIR DIRSEP "journal", js->ignorecache, &js->retcode,do_entry,js);
+		blog->getfile(req,CACHE_DIR DIRSEP "journal", js->ignorecache, &js->retcode,do_entry,js);
 		return;
 	}
 	if (js->limit == 2 && js->retcode!=200)
@@ -209,7 +215,7 @@ static void do_entry(char *tmpbuf, void *data)
 	printf("tuid = '%s'\n",tuid);
 	free(tmpbuf);
 
-	js->callback(entries);
+	js->callback(entries,js->user_data);
 }
 
 typedef struct
@@ -225,12 +231,12 @@ static void blog_post(blog_state *blog, const blog_entry* entry, void (*callback
 {
 	//char *outbuf = NULL;
 	long retcode;
-	Request *req = browser_curl(blog->b,"http://www.okcupid.com/journal");
+	Request *req = blog->browser_curl(blog->b,"http://www.okcupid.com/journal");
 	post_data * pd = (post_data*)malloc(sizeof(post_data));
 	pd->blog = blog;
 	pd->entry = entry;
 	pd->callback = callback;
-	browser_append_post(req,
+	blog->browser_append_post(req,
 		"tuid",((okcupid_priv*)blog->_priv)->tuid,
 		"title", entry->title,
 		"content",entry->content,
@@ -246,8 +252,8 @@ static void blog_post(blog_state *blog, const blog_entry* entry, void (*callback
 		"trackback_uservar","",
 		"trackback_hideresponseline","",
 		NULL);
-	browser_set_referer(req,"http://www.okcupid.com/jpost");
-	getfile(req,CACHE_DIR DIRSEP "journal", true, &retcode, date_set, pd);
+	blog->browser_set_referer(req,"http://www.okcupid.com/jpost");
+	blog->getfile(req,CACHE_DIR DIRSEP "journal", true, &retcode, date_set, pd);
 }
 
 static void more_date_set(char *tmpbuf, void *data);
@@ -256,14 +262,15 @@ static void end_post(char *tmpbuf, void *data);
 static void date_set(char *tmpbuf, void *data)
 {
 	post_data *pd = data;
+	blog_state *blog = pd->blog;
 	free(tmpbuf);
 
 	if (pd->entry->date.tm_year!=0)
 	{
-		browser *b = pd->blog->b;
-		Request *req = browser_curl(b,"http://www.okcupid.com/journal");
+		browser *b = blog->b;
+		Request *req = blog->browser_curl(b,"http://www.okcupid.com/journal");
 		long retcode;
-		getfile(req,CACHE_DIR DIRSEP "journal", true, &retcode, more_date_set, pd);
+		blog->getfile(req,CACHE_DIR DIRSEP "journal", true, &retcode, more_date_set, pd);
 	}
 	else	
 		end_post(NULL,pd);
@@ -272,6 +279,7 @@ static void date_set(char *tmpbuf, void *data)
 static void more_date_set(char *tmpbuf, void *data)
 {
 	post_data *pd = data;
+	blog_state *blog = pd->blog;
 	regex_t datareg;
 	if (regcomp(&datareg, "\\/jpost\\?edit=(\\d+)", 0) != 0) {
 		printf("Error while compiling pattern\n");
@@ -295,8 +303,8 @@ static void more_date_set(char *tmpbuf, void *data)
 	int gmt=mktime((struct tm*)&(pd->entry->date));
 	printf("gmt=%d\n",gmt);
 	//free(outbuf);
-	Request *req = browser_curl(pd->blog->b,"http://www.okcupid.com/journal");
-	browser_append_post(req,
+	Request *req = blog->browser_curl(pd->blog->b,"http://www.okcupid.com/journal");
+	blog->browser_append_post(req,
 		"tuid",((okcupid_priv*)pd->blog->_priv)->tuid,
 		"update","1",
 		"postid",uid,
@@ -315,7 +323,7 @@ static void more_date_set(char *tmpbuf, void *data)
 		"trackback_uservar","",
 		"trackback_hideresponseline","",
 		NULL);
-	getfile(req,NULL, false, &retcode, end_post, pd);
+	blog->getfile(req,NULL, false, &retcode, end_post, pd);
 }
 
 static void end_post(char *tmpbuf, void *data)
@@ -329,8 +337,11 @@ static void end_post(char *tmpbuf, void *data)
 
 static void cleanup(blog_state *blog)
 {
-	browser_free(blog->b);
+	blog->browser_free(blog->b);
 }
 
-const blog_system okcupid_blog_system = {blog_init,get_entries,blog_post,cleanup};
+__BEGIN_DECLS
+const blog_system functions = {"okcupid.png","http://www.okcupid.com",blog_init,get_entries,blog_post,cleanup};
+const char *blog_name(){return "OKCupid";}
+__END_DECLS
 

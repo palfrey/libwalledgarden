@@ -32,8 +32,11 @@
 #include <pcreposix.h>
 #include "browser.h"
 #include "cookies.h"
-#include "blog.h"
+#include "walledgarden.h"
 #include <glib.h>
+
+#define blog_name libmyspace_LTX_blog_name
+#define functions libmyspace_LTX_functions
 
 typedef struct _myspace_priv
 {
@@ -55,13 +58,14 @@ static void check_code(char *tmpbuf, void *data)
 {
 	login_struct *ls = data;
 	free(tmpbuf);
-	if (ls->retcode!=0 && ls->retcode!=302)
+	//if (ls->retcode!=0 && ls->retcode!=302)
+	if (strstr(tmpbuf,"Member Login")!=NULL)
 	{
 		printf("login failure (%ld)\n",ls->retcode);
-		exit(EXIT_FAILURE);
-		ls->callback(false,ls->user_data);
+		if (ls->callback!=NULL)
+			ls->callback(false,ls->user_data);
 	}
-	else	
+	else if (ls->callback!=NULL)
 		ls->callback(true,ls->user_data);
 }
 
@@ -109,8 +113,8 @@ static void parse_login(char *tmpbuf, void *data)
 		}
 		ls->ignorecache = true;	
 		free(tmpbuf);
-		Request *req = browser_curl(blog->b,"http://www.myspace.com");
-		getfile(req,CACHE_DIR DIRSEP "login", ls->ignorecache, NULL, parse_login, ls);
+		Request *req = blog->browser_curl(blog->b,"http://www.myspace.com");
+		blog->getfile(req,CACHE_DIR DIRSEP "login", ls->ignorecache, NULL, parse_login, ls);
 		return;
 	}
 	tmpbuf[match[1].rm_eo] = '\0';
@@ -119,36 +123,35 @@ static void parse_login(char *tmpbuf, void *data)
 	printf("token is %s\n",p->token);
 	free(tmpbuf);
 
-	Request *req = browser_curl(blog->b,url);
-	browser_append_post(req,
+	Request *req = blog->browser_curl(blog->b,url);
+	blog->browser_append_post(req,
 		"email",p->username,
 		"password",p->password,
 		"Remember","Remember",
 		"ctl00%$Main%$SplashDisplay%$login%$loginbutton.x","19",
 		"ctl00%$Main%$SplashDisplay%$login%$loginbutton.y","11",
 		NULL);
-	getfile(req,CACHE_DIR DIRSEP "logged",ls->ignorecache,&ls->retcode,check_code,ls);
+	blog->getfile(req,CACHE_DIR DIRSEP "logged",ls->ignorecache,&ls->retcode,check_code,ls);
 }
 
 static void login(blog_state *blog, bool ignorecache, void(*callback)(bool, void *), void* data)
 {
-	Request *req = browser_curl(blog->b,"http://www.myspace.com");
+	Request *req = blog->browser_curl(blog->b,"http://www.myspace.com");
 	login_struct *ls = (login_struct*)malloc(sizeof(login_struct));
 	ls->callback = callback;
 	ls->user_data = data;
 	ls->b = blog;
-	getfile(req,CACHE_DIR DIRSEP "login", ignorecache, NULL, parse_login, ls);
+	blog->getfile(req,CACHE_DIR DIRSEP "login", ignorecache, NULL, parse_login, ls);
 }
 
-static void blog_init(blog_state *blog, const char *username, const char *password, void(*callback)(bool,void*))
+static void blog_init(blog_state *blog, const char *username, const char *password, void(*callback)(bool,void*), void*data)
 {
-	blog->b = browser_init(COOKIE_FILE);
 	blog->_priv = malloc(sizeof(myspace_priv));
 	myspace_priv *p = (myspace_priv*)blog->_priv;
 
 	p->username = strdup(username);
 	p->password = strdup(password);
-	login(blog, false, callback,NULL);
+	login(blog, false, callback,data);
 }
 
 typedef struct
@@ -157,7 +160,8 @@ typedef struct
 	long retcode;
 	blog_state *blog;
 	bool ignorecache;
-	void (*callback)(blog_entry **);
+	void (*callback)(blog_entry **, void*);
+	void *user_data;
 	bool handle_data;
 	blog_entry **entries;
 	int count;
@@ -166,7 +170,7 @@ typedef struct
 
 static void do_entry(char *tmpbuf, void *data);
 
-static void get_entries(blog_state *blog, bool ignorecache, void (*callback)(blog_entry **))
+static void get_entries(blog_state *blog, bool ignorecache, void (*callback)(blog_entry **, void*), void *user_data)
 {
 	journal_storage *js = (journal_storage*)calloc(1,sizeof(journal_storage));
 	js->entries = (blog_entry**)calloc(1,sizeof(blog_entry*));
@@ -175,6 +179,7 @@ static void get_entries(blog_state *blog, bool ignorecache, void (*callback)(blo
 	js->blog = blog;
 	js->ignorecache = ignorecache;
 	js->callback = callback;
+	js->user_data = user_data;
 	js->handle_data = false;
 	js->limit = 0;
 	do_entry(NULL, js);
@@ -197,6 +202,7 @@ static void parse_blog(char *tmpbuf, void *data);
 static void do_entry(char *tmpbuf, void *data)
 {
 	journal_storage *js = data;
+	blog_state *blog = js->blog;
 	myspace_priv *p = (myspace_priv*)js->blog->_priv;
 	regmatch_t match[3];
 	char *url;
@@ -238,10 +244,10 @@ static void do_entry(char *tmpbuf, void *data)
 			break;
 		
 		url = g_strdup_printf("http://home.myspace.com/index.cfm?fuseaction=user&MyToken=%s",p->token);
-		Request *req = browser_curl(js->blog->b, url);
+		Request *req = blog->browser_curl(js->blog->b, url);
 		js->limit++;
 		js->handle_data = true;
-		getfile(req,CACHE_DIR DIRSEP "home", js->ignorecache, &js->retcode,do_entry,js);
+		blog->getfile(req,CACHE_DIR DIRSEP "home", js->ignorecache, &js->retcode,do_entry,js);
 		free(url);
 		return;
 	}
@@ -255,16 +261,17 @@ static void do_entry(char *tmpbuf, void *data)
 	url = strdup(&tmpbuf[match[1].rm_so]);
 	free(tmpbuf);
 	
-	Request *req = browser_curl(js->blog->b,url);
-	getfile(req,CACHE_DIR DIRSEP "blog", js->ignorecache, &js->retcode, parse_blog, js);
+	Request *req = blog->browser_curl(js->blog->b,url);
+	blog->getfile(req,CACHE_DIR DIRSEP "blog", js->ignorecache, &js->retcode, parse_blog, js);
 	free(url);
 }
 
-static replace space[] = {{" ","%20"}};
+//static replace space[] = {{" ","%20"}};
 
 static void parse_blog(char *tmpbuf, void *data)
 {
 	journal_storage *js = data;
+	//blog_state *blog = js->blog;
 	regex_t hrefreg,moodreg,datareg,nextreg;
 	int ret;
 	regmatch_t match[3];
@@ -412,25 +419,25 @@ static void parse_blog(char *tmpbuf, void *data)
 		}
 		js->entries[js->count] = NULL;
 		ret = regexec(&nextreg, tmpbuf, 2, match, 0);
-		if (ret==0)
+		/*if (ret==0)
 		{
 			printf("older entries\n");
 			tmpbuf[match[1].rm_eo] = '\0';
 			printf("url = %s\n",&tmpbuf[match[1].rm_so]);
 
 			char *url = findandreplace(&tmpbuf[match[1].rm_so],space,1);
-			Request *req = browser_curl(js->blog->b,url);
+			Request *req = blog->browser_curl(js->blog->b,url);
 			char *name = g_strdup_printf(CACHE_DIR DIRSEP "blog-%d",js->true_entries);
-			getfile(req,name, js->ignorecache, &js->retcode, parse_blog, js);
+			blog->getfile(req,name, js->ignorecache, &js->retcode, parse_blog, js);
 			return;
-		}
+		}*/
 	}
-	js->callback(js->entries);
+	js->callback(js->entries,js->user_data);
 }
 
 static void cleanup(blog_state *blog)
 {
-	browser_free(blog->b);
+	blog->browser_free(blog->b);
 }
 
 typedef struct
@@ -454,9 +461,9 @@ static void blog_post(blog_state *blog, const blog_entry* entry, void (*callback
 	Request *req;
 	
 	url = g_strdup_printf("http://blog.myspace.com/index.cfm?fuseaction=blog.previewBlog&Mytoken=%s",p->token);
-	req = browser_curl(blog->b,url);
+	req = blog->browser_curl(blog->b,url);
 
-	browser_append_post(req,
+	blog->browser_append_post(req,
 		"blogID","-1",
 		"postTimeMarker", entry->date.tm_hour>=12?"PM":"AM",
 		"subject", pd->entry->title,
@@ -477,7 +484,7 @@ static void blog_post(blog_state *blog, const blog_entry* entry, void (*callback
 		"BlogViewingPrivacyID","0",
 		"Enclosure","",
 		NULL);
-	browser_append_post_int(req,
+	blog->browser_append_post_int(req,
 		"postMonth", entry->date.tm_mon+1,
 		"postDay", entry->date.tm_mday,
 		"postYear",entry->date.tm_year+1900,
@@ -485,7 +492,7 @@ static void blog_post(blog_state *blog, const blog_entry* entry, void (*callback
 		"postMinute", entry->date.tm_min,
 		NULL);
 		
-	getfile(req,CACHE_DIR DIRSEP "post", true, NULL, publish, pd);
+	blog->getfile(req,CACHE_DIR DIRSEP "post", true, NULL, publish, pd);
 	free(url);
 }
 
@@ -494,6 +501,7 @@ static void end_post(char *tmpbuf, void *data);
 static void publish(char *tmpbuf, void *data)
 {
 	post_data *pd = data;
+	blog_state *blog = pd->blog;
 	regex_t datareg;
 	const blog_entry* entry = pd->entry;
 	regmatch_t match[2];
@@ -510,9 +518,9 @@ static void publish(char *tmpbuf, void *data)
 		pd->callback(false);
 	}
 	tmpbuf[match[1].rm_eo] = '\0';
-	Request *req = browser_curl(pd->blog->b,"http://blog.myspace.com/index.cfm?fuseaction=blog.processCreate");
+	Request *req = blog->browser_curl(pd->blog->b,"http://blog.myspace.com/index.cfm?fuseaction=blog.processCreate");
 	
-	browser_append_post(req,
+	blog->browser_append_post(req,
 		"blogID","-1",
 		"postTimeMarker", entry->date.tm_hour>=12?"PM":"AM",
 		"subject", pd->entry->title,
@@ -534,7 +542,7 @@ static void publish(char *tmpbuf, void *data)
 		"hash", &tmpbuf[match[1].rm_so],
 		"Enclosure","",
 		NULL);
-	browser_append_post_int(req,
+	blog->browser_append_post_int(req,
 		"postMonth", entry->date.tm_mon+1,
 		"postDay", entry->date.tm_mday,
 		"postYear",entry->date.tm_year+1900,
@@ -542,7 +550,7 @@ static void publish(char *tmpbuf, void *data)
 		"postMinute", entry->date.tm_min,
 		NULL);
 	free(tmpbuf);
-	getfile(req,CACHE_DIR DIRSEP "posted", true, NULL, end_post, pd);
+	blog->getfile(req,CACHE_DIR DIRSEP "posted", true, NULL, end_post, pd);
 }
 
 static void end_post(char *tmpbuf, void *data)
@@ -554,5 +562,7 @@ static void end_post(char *tmpbuf, void *data)
 	pd->callback(true);
 }
 
-const blog_system myspace_blog_system = {blog_init,get_entries,blog_post, cleanup};
-
+__BEGIN_DECLS
+const blog_system functions = {"myspace.png","http://www.myspace.com",blog_init,get_entries,blog_post, cleanup};
+const char *blog_name(){return "MySpace";}
+__END_DECLS

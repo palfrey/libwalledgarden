@@ -1,0 +1,12 @@
+# This is a comment
+includedir=@includedir@
+libdir=@libdir@
+modulesdir=@libdir@/walledgarden
+
+Name: LibWalledGarden                         
+Description: API for api-less blogging systems
+Version: 0.1
+URL: http://tevp.net/projects/walledgarden
+Libs: -L${libdir} -lwalledgarden
+Libs.private: -lltdl
+Cflags: -I${includedir}
