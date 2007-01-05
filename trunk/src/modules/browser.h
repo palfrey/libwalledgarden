@@ -40,19 +40,21 @@ char * strptime (const char *buf, const char *format, struct tm *timeptr);
 #include <time.h>
 #endif
 
-typedef struct _browser
+#include "walledgarden.h"
+
+struct _browser 
 {
 	char *jar;
-} browser;
+	void *_priv;
+};
 
-typedef struct _Request Request;
 
-browser * browser_init(const char *jar);
-void browser_free(browser* b);
-Request * browser_curl(browser *b, const char *url);
-void browser_append_post(Request *req, ...) __attribute__((__sentinel__(0)));
-void browser_append_post_int(Request *req, ...) __attribute__((__sentinel__(0)));
-void browser_set_referer(Request *req, const char* referer);
+browser * _browser_init(const char *jar);
+void _browser_free(browser* b);
+Request * _browser_curl(browser *b, const char *url);
+void _browser_append_post(Request *req, ...) __attribute__((__sentinel__(0)));
+void _browser_append_post_int(Request *req, ...) __attribute__((__sentinel__(0)));
+void _browser_set_referer(Request *req, const char* referer);
 
 #ifdef _WIN32
 #define DIRSEP "\\"
@@ -61,7 +63,7 @@ void browser_set_referer(Request *req, const char* referer);
 #endif
 
 bool exists(const char *filename);
-void getfile(Request *req, const char *filename, bool ignorefile, long *retcode, void (*callback)(char *, void *data), void *data);
+void _getfile(Request *req, const char *filename, bool ignorefile, long *retcode, void (*callback)(char *, void *data), void *data);
 
 typedef struct _replace
 {
@@ -82,4 +84,14 @@ void ready_wait(ThreadReady *th);
 void ready_wait_time(ThreadReady *th, uint16_t seconds);
 void ready_done(ThreadReady *th);
 bool ready_test(ThreadReady *th);
+
+#undef __BEGIN_DECLS
+#undef __END_DECLS
+#ifdef __cplusplus
+# define __BEGIN_DECLS extern "C" {
+# define __END_DECLS }
+#else
+# define __BEGIN_DECLS /* empty */
+# define __END_DECLS /* empty */
+#endif
 #endif
