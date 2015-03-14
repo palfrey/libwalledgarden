@@ -1,0 +1,3 @@
+Many newer systems providing blogging services (MySpace, OKCupid, last.fm, etc) do not provide any form of API to post items to the service, and users therefore cannot use blog client software and are forced to use the often very limited web forms provided by the service. libwalledgarden aims to solve this, by providing an API to these 'walled garden' services.
+
+Major target is providing support in to Drivel, but can be used by other clients as well.
